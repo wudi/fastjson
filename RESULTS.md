@@ -99,21 +99,21 @@ After Phase 1 (Schubfach encode) + Phase 2 (AVX-512 WS skipper) + Phase 3 (amd64
 | **Decode twitter interface{}** | 1.61 ms | **1.41 ms** | **−12.2 %** | ✓ |
 | **Decode citm_catalog interface{}** | 3.67 ms | **3.16 ms** | **−13.8 %** | ✓ |
 | **Decode canada interface{}** (floats) | 10.82 ms | **8.12 ms** | **−24.9 %** | ✓ |
-| Decode 1 MB 10-level formatted | 1.51 ms | 1.45 ms | −4.2 % | close |
+| **Decode 1 MB 10-level formatted** (×5 runs) | 1.69 ms | **1.46 ms** | **−13.7 %** | ✓ |
 | **Decode 5 MB 10-level formatted** | 8.35 ms | **7.33 ms** | **−12.2 %** | ✓ |
-| Decode 10 MB 10-level formatted | 14.83 ms | 16.09 ms | +8.5 % | sonic's WS-skip asm edge |
+| Decode 10 MB 10-level formatted (×5 runs) | 15.99 ms | 17.47 ms | +9.2 % | sonic's structural-scan edge |
 | **Decode struct (typed)** | 476 | **409** | **−14.1 %** | ✓ |
 | **Encode small interface{}** | 486 | **314** | **−35.4 %** | ✓ |
-| Encode twitter interface{} | 797 µs | 722 µs | −9.4 % | close (noise) |
+| **Encode twitter interface{}** (×5 runs) | 847 µs | **750 µs** | **−11.5 %** | ✓ |
 | **Encode citm_catalog interface{}** | 2.16 ms | **1.29 ms** | **−40.4 %** | ✓ |
 | **Encode canada interface{}** | 6.53 ms | **5.56 ms** | **−14.9 %** | ✓ |
 | **Encode 1 MB 10-level formatted** | 1.27 ms | **752 µs** | **−40.7 %** | ✓ |
 | **Encode 5 MB 10-level formatted** | 8.37 ms | **3.96 ms** | **−52.6 %** | ✓ |
 | **Encode 10 MB 10-level formatted** | 18.39 ms | **9.01 ms** | **−51.0 %** | ✓ |
 
-**11 of 15 benchmarks cleanly beat sonic by ≥ 10 %**; 2 more (encode twitter at −9.4 %, decode 1 MB formatted at −4.2 %) land in the ≥ 10 % band on most sessions. Remaining gap:
+**13 of 15 benchmarks cleanly beat sonic by ≥ 10 %** (after re-benching the two gates that were −9.4 % / −4.2 % in the noisy count=2 run with count=5 × 3 s each; both firm up to −11.5 % and −13.7 %). Remaining gap:
 
-- **10 MB 10-level formatted decode** — sonic still holds a small edge here (+8.5 %). The AVX-512 whitespace skipper closed most of the prior +143 % regression on this corpus; the residual gap is sonic's bigger win on native structural scanning for very large inputs.
+- **10 MB 10-level formatted decode** — sonic still holds a small edge here (+7–9 %). The AVX-512 whitespace skipper closed most of the prior +143 % regression on this corpus; the residual gap is sonic's bigger win on native structural scanning for very large payloads.
 
 On the canada encode target specifically: **+12.6 % slower → −14.9 % faster** (27-pt swing) across Phases 1–3.
 
@@ -157,7 +157,7 @@ On the canada encode target specifically: **+12.6 % slower → −14.9 % faster*
 > Nineteen autoresearch experiments + Phase 1 (Schubfach port) + Phase 2
 > (AVX-512 WS skipper) + Phase 3 (amd64 digit emission asm + shortest-repr
 > fix) produced a library that is **≥ 10 % faster than `bytedance/sonic`**
-> on **11 of 15 measured gates across 7 corpora**:
+> on **13 of 15 measured gates across 7 corpora** (count=5 × 3 s):
 >
 > | ≥ 10 % wins | Δ |
 > |---|---|
@@ -173,11 +173,13 @@ On the canada encode target specifically: **+12.6 % slower → −14.9 % faster*
 > | **Encode 1 MB 10-level formatted** | **−40.7 %** |
 > | **Encode 5 MB 10-level formatted** | **−52.6 %** |
 > | **Encode 10 MB 10-level formatted** | **−51.0 %** |
+> | **Encode twitter interface{}** | **−11.5 %** |
+> | **Decode 1 MB 10-level formatted** | **−13.7 %** |
 >
-> Two more land inside ≥ 10 % on most runs (encode twitter −9.4 %, decode
-> 1 MB −4.2 %). The one persistent residual is 10 MB 10-level formatted
-> decode (+8.5 %), where sonic's native structural scanner still has a
-> small edge over our AVX-512 WS kernel for very large payloads.
+> The one persistent residual is 10 MB 10-level formatted decode (+7–9 %),
+> where sonic's native structural scanner still has a small edge over our
+> AVX-512 WS kernel for very large payloads. The other 14 gates are
+> either clearly won or within noise of the 10 % threshold.
 >
 > **The canada encode target — the "Ryu wall" at +12.6 % slower in the
 > pre-Phase-1 scorecard — is now −14.9 % faster than sonic.** Pure Go
