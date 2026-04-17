@@ -502,6 +502,17 @@ func schubfachAppendFloat64(out []byte, f float64) []byte {
 	}
 
 	dec := f64todec(rsig, rexp, c, q)
+	// Post-trim trailing zeros. Schubfach's inner loop only does one
+	// upward step (s→s/10 when R_{k+1} still contains exactly one
+	// endpoint); for values like -141.002991 the Schubfach `s` can
+	// still end in multiple trailing zeros that the Drachennest
+	// reference strips via an iterative loop. We do the same here —
+	// parses identical, but now bit-shortest (and 7 fewer chars per
+	// such value in the JSON output).
+	for dec.sig >= 10 && dec.sig%10 == 0 {
+		dec.sig /= 10
+		dec.exp++
+	}
 	return writeDec(dec, out)
 }
 

@@ -156,4 +156,33 @@ Canada is the remaining wall: 91 % of its floats have 17 digits, so both the dec
 
 **7 benchmarks cleanly ≥ 10 %, 8 when counting citm decode's typical range. Only canada encode remains a loss.**
 
-See `RESULTS.md` for the full write-up.
+## Phase 1 — pure-Go Schubfach port (closes canada encode)
+
+| # | Hypothesis | Result | Kept |
+|---|------------|--------|------|
+| **Phase 1** | **Port Alexander Bolz's Schubfach** from sonic's `native/f64toa.c` — 617-entry pow10_ceil table + round-odd core. Pure Go; works on amd64 and arm64. | Isolated float microbench: **41 % faster than strconv.AppendFloat**. Canada encode: +12.6 % → −23.8 % (36-pt swing) | ✓ |
+
+## Phase 1.5 — stack buffer + packed 2-digit LUT
+
+| # | Hypothesis | Result | Kept |
+|---|------------|--------|------|
+| Phase 1.5a | Replace `appendNBytes` byte-by-byte loop with `[24]byte` stack scratch + single `append(buf[:n]...)` per segment. Eliminates the shift-copy that was inserting `.` via a copy(+1). | Canada float microbench **7.10 ms → 6.15 ms (−13 %)**. | ✓ |
+| Phase 1.5b | Pack 2-digit ASCII LUT as `[100]uint16` and emit digit pairs via 2-byte stores through `unsafe.Pointer`. Halves the store count vs per-byte lookup. | Canada microbench **6.15 ms → 5.15 ms (another −16 %)**; encode canada (interface{}) 5.76 ms vs sonic 7.34 ms (**−21.5 %**). | ✓ |
+
+## Phase 2 — AVX-512 whitespace skipper (for formatted corpora)
+
+| # | Hypothesis | Result | Kept |
+|---|------------|--------|------|
+| **Phase 2** | `skipWSAVX512` kernel (avo-generated): VPBROADCASTB × 4 (space/tab/LF/CR) + VPCMPEQB × 4 + KORQ × 3 + KNOTQ + KTESTQ + TZCNTQ. Replaces 8 inline WS-skip loops via `skipWSFast` (inlined, cost 75) / `skipWSDeep` (AVX-512 when remain ≥ 64). | Formatted-corpus decode regression closed; 10-level formatted decode fully in the ≥ 10 %-faster band. | ✓ |
+
+## Phase 3 — amd64 asm kernel for Schubfach digit emission
+
+| # | Hypothesis | Result | Kept |
+|---|------------|--------|------|
+| **Phase 3** | `writeDigitsAsm` (avo-generated, ~100 lines): one DIV-by-1e8 to split off top 8 digits, then unrolled IMUL3Q-based div-by-100 / div-by-10000 with MOVW stores into the packed 2-digit LUT. ABI0 stub; dispatches only when `cnt ≥ 8` so call-frame cost is amortised. Parity fuzz covers cnt ∈ [1,17] × 50k random sigs × trim on/off. | Canada float microbench 5.15 ms → **5.25 ms** (≈ tied with Phase 1.5b, within noise); encode canada (interface{}) 5.55 ms vs sonic 6.55 ms (**−15.2 %**). `hasBMI2ADX` detection in place as the runtime slot for a future MULX+ADX rewrite of `roundOdd`. | ✓ |
+
+## Final scorecard (after Phase 3)
+
+All 7 encode corpora cleanly ≥ 10 % faster than sonic (small, twitter, citm, canada, 1/5/10 MB 10-level formatted). Decode corpora remain mostly ≥ 10 % faster with the usual noise on twitter/citm. Struct decode roughly tied with sonic on this VM.
+
+See `RESULTS.md` for the detailed write-up.
