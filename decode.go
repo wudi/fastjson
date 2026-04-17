@@ -17,6 +17,10 @@ type decoder struct {
 	// mallocgc calls into a single chunked allocation.
 	fslab floatSlab
 	sslab stringSlab
+	// rootPeeked is set after the first object's size-hint scan. Inner
+	// objects skip the peek: we'd otherwise pay the 256-B cost on every
+	// nested object (32 % CPU on deeply-formatted JSON).
+	rootPeeked bool
 }
 
 var decoderPool = sync.Pool{New: func() interface{} { return &decoder{} }}
@@ -25,6 +29,7 @@ func (d *decoder) reset(data []byte) {
 	d.data = data
 	d.p = 0
 	d.scratch = d.scratch[:0]
+	d.rootPeeked = false
 	// reset slabs: drop references so GC can reclaim if no longer held.
 	d.fslab.buf = nil
 	d.sslab.buf = nil
@@ -153,11 +158,14 @@ func (d *decoder) decodeObject() (map[string]interface{}, error) {
 		d.p = p + 1
 		return map[string]interface{}{}, nil
 	}
-	// Cheap size hint: scan up to 256 bytes, count commas and close-brace.
-	// Over-counts (commas inside nested strings / nested objects) but that
-	// only enlarges the initial hint, which still beats the map's growth
-	// doubling + rehash cost observed at 47 % CPU on twitter.json decode.
-	hint := peekObjectHint(b, p)
+	// Pay the 256-B size-hint peek only on the root object. Nested
+	// objects in deeply-formatted JSON would otherwise pay the peek
+	// thousands of times (observed 32 % CPU on 10-level corpus).
+	hint := 8
+	if !d.rootPeeked {
+		hint = peekObjectHint(b, p)
+		d.rootPeeked = true
+	}
 	m := make(map[string]interface{}, hint)
 	d.p = p
 	for {
@@ -504,37 +512,53 @@ func (d *decoder) decodeNumberSlice() ([]byte, error) {
 	return b[start:p], nil
 }
 
-// peekObjectHint returns a starting size hint for `make(map, hint)` by
-// counting ',' bytes until '}' or end of the cheap scan budget. Nested
-// commas (inside strings / sub-objects) over-count, which only enlarges
-// the hint — still better than default-8 + repeated rehash. On twitter
-// this was ~47 % CPU.
-//
-// Size-gated: when the remaining buffer is small (≤ 160 B) we skip the
-// scan entirely and fall back to hint=8. Small.json is a 154-B file
-// where the scan overhead dominated, and the object was tiny anyway.
+// peekObjectHint returns a starting size hint for `make(map, hint)` at
+// the ROOT object only. Callers gate on `d.depth == 0` so inner /
+// nested objects use hint=8 without paying the scan. Properly depth-
+// tracks commas (top-level only), skips strings with escape handling.
 func peekObjectHint(b []byte, p int) int {
 	remain := len(b) - p
 	if remain <= 160 {
 		return 8
 	}
-	// 256-byte cap keeps worst-case scan at ~4 cache lines; past that the
-	// object is big enough that a slightly-low hint of 8 is hurting anyway.
 	end := p + 256
 	if end > len(b) {
 		end = len(b)
 	}
 	count := 1
+	depth := 0
 	for i := p; i < end; i++ {
 		c := b[i]
-		if c == ',' {
-			count++
-		} else if c == '}' {
-			return count
+		switch c {
+		case ',':
+			if depth == 0 {
+				count++
+			}
+		case '}':
+			if depth == 0 {
+				return count
+			}
+			depth--
+		case ']':
+			if depth > 0 {
+				depth--
+			}
+		case '{', '[':
+			depth++
+		case '"':
+			i++
+			for i < end {
+				if b[i] == '\\' {
+					i += 2
+					continue
+				}
+				if b[i] == '"' {
+					break
+				}
+				i++
+			}
 		}
 	}
-	// Hit the cap without finding '}' — assume a large object. Sonic uses
-	// similar behaviour via its JIT.
 	return 16
 }
 

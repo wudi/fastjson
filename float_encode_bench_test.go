@@ -47,3 +47,15 @@ func BenchmarkFloatEPrec17(b *testing.B) {
 	}
 	_ = buf
 }
+
+func BenchmarkFloatSchubfach(b *testing.B) {
+	buf := make([]byte, 0, 64)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, v := range canadaSamples {
+			buf = schubfachAppendFloat64(buf[:0], v)
+		}
+	}
+	_ = buf
+}

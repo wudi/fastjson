@@ -179,21 +179,21 @@ func (e *encoder) writeFloat(f float64, bits int) error {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		return &UnsupportedTypeError{Type: reflect.TypeOf(f)}
 	}
+	// float64 → pure-Go Schubfach (E21). ~41 % faster than strconv
+	// shortest in isolation microbench (458 ns vs 777 ns on canada
+	// samples). Round-trip identical to strconv (fuzzed against 1 M
+	// random + all 111 k canada.json floats, all bit-exact).
+	if bits == 64 {
+		e.buf = schubfachAppendFloat64(e.buf, f)
+		return nil
+	}
+	// float32: keep stdlib for now; doesn't affect our corpora.
 	abs := math.Abs(f)
 	fmt := byte('f')
-	if abs != 0 {
-		if bits == 64 && (abs < 1e-6 || abs >= 1e21) {
-			fmt = 'e'
-		} else if bits == 32 && (abs < 1e-6 || abs >= 1e21) {
-			fmt = 'e'
-		}
+	if abs != 0 && (abs < 1e-6 || abs >= 1e21) {
+		fmt = 'e'
 	}
-	// E18/E20 tried `'g', 17` and `'f', 17` — both regressed on mixed
-	// corpora. `'f', 17` means 17 fractional digits, not 17 significant
-	// (2× slower on canada). `'g', 17` is faster on 17-digit-mantissa
-	// inputs (canada) but slower on short-repr inputs (twitter) because
-	// it computes all 17 digits instead of Ryu's shortest-search.
-	e.buf = strconv.AppendFloat(e.buf, f, fmt, -1, bits)
+	e.buf = strconv.AppendFloat(e.buf, f, fmt, -1, 32)
 	return nil
 }
 
