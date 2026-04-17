@@ -21,6 +21,23 @@ func cachedEncoder(t reflect.Type) typedEncodeFn {
 }
 
 func buildEncoder(t reflect.Type) typedEncodeFn {
+	// json.Marshaler / encoding.TextMarshaler take priority over the kind
+	// switch. Pointer kinds defer to buildPtrEncoder so nil → "null" is
+	// handled before we attempt to call MarshalJSON on a nil receiver.
+	if t.Kind() != reflect.Ptr {
+		if t.Implements(marshalerType) {
+			return buildMarshalerEncoder(t, false)
+		}
+		if reflect.PtrTo(t).Implements(marshalerType) {
+			return buildMarshalerEncoder(t, true)
+		}
+		if t.Implements(textMarshalerType) {
+			return buildTextMarshalerEncoder(t, false)
+		}
+		if reflect.PtrTo(t).Implements(textMarshalerType) {
+			return buildTextMarshalerEncoder(t, true)
+		}
+	}
 	switch t.Kind() {
 	case reflect.String:
 		return encString

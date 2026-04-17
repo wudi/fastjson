@@ -23,6 +23,18 @@ func cachedDecoder(t reflect.Type) typedDecodeFn {
 }
 
 func buildDecoder(t reflect.Type) typedDecodeFn {
+	// json.Unmarshaler / encoding.TextUnmarshaler win over the kind switch —
+	// including for slices (json.RawMessage is []byte but must NOT go through
+	// the base64 path). Pointer kinds defer: buildPtrDecoder handles null →
+	// nil first, then recurses into the element where this check runs again.
+	if t.Kind() != reflect.Ptr {
+		if reflect.PtrTo(t).Implements(unmarshalerType) {
+			return buildUnmarshalerDecoder(t)
+		}
+		if reflect.PtrTo(t).Implements(textUnmarshalerType) {
+			return buildTextUnmarshalerDecoder(t)
+		}
+	}
 	switch t.Kind() {
 	case reflect.String:
 		return decString
