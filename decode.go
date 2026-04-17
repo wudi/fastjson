@@ -237,11 +237,7 @@ func (d *decoder) decodeArray() ([]interface{}, error) {
 		return []interface{}{}, nil
 	}
 	d.p = p
-	// Same peek-hint trick as decodeObject: count commas within a cheap
-	// budget. Canada.json has ~500-element outer arrays that grow through
-	// 4→8→16→…→512 (≈ 8 allocs each). A better initial cap kills most of
-	// that GC pressure.
-	arr := make([]interface{}, 0, peekArrayHint(b, p))
+	arr := make([]interface{}, 0, 4)
 	for {
 		val, err := d.decodeAny()
 		if err != nil {
@@ -508,34 +504,20 @@ func (d *decoder) decodeNumberSlice() ([]byte, error) {
 	return b[start:p], nil
 }
 
-// peekArrayHint estimates an initial slice capacity by counting ',' until
-// ']'. Scans up to 512 bytes of cheap work (no depth tracking, no string
-// skipping). Over-counts in exchange for one allocation vs log2(N) allocs
-// + copies.
-func peekArrayHint(b []byte, p int) int {
-	end := p + 512
-	if end > len(b) {
-		end = len(b)
-	}
-	count := 1
-	for i := p; i < end; i++ {
-		c := b[i]
-		if c == ',' {
-			count++
-		} else if c == ']' {
-			return count
-		}
-	}
-	// Hit cap without finding the close — likely a large array.
-	return 64
-}
-
 // peekObjectHint returns a starting size hint for `make(map, hint)` by
 // counting ',' bytes until '}' or end of the cheap scan budget. Nested
 // commas (inside strings / sub-objects) over-count, which only enlarges
 // the hint — still better than default-8 + repeated rehash. On twitter
 // this was ~47 % CPU.
+//
+// Size-gated: when the remaining buffer is small (≤ 160 B) we skip the
+// scan entirely and fall back to hint=8. Small.json is a 154-B file
+// where the scan overhead dominated, and the object was tiny anyway.
 func peekObjectHint(b []byte, p int) int {
+	remain := len(b) - p
+	if remain <= 160 {
+		return 8
+	}
 	// 256-byte cap keeps worst-case scan at ~4 cache lines; past that the
 	// object is big enough that a slightly-low hint of 8 is hurting anyway.
 	end := p + 256

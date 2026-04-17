@@ -8,16 +8,27 @@ import (
 
 // structField holds the info needed to decode one field.
 type structField struct {
-	name     string // JSON name
-	nameHash uint64
-	offset   uintptr
-	dec      typedDecodeFn
+	name    string // JSON name
+	prefix  uint64 // first min(8, len(name)) bytes, little-endian; zero-padded
+	nameLen int
+	offset  uintptr
+	dec     typedDecodeFn
 }
 
 type structPlan struct {
 	fields []structField
-	// 8-byte key prefix -> candidate index(es). For small structs we just
-	// linear-scan; the hash is only for correctness-cheap comparison.
+}
+
+// loadPrefix8 reads up to 8 bytes of s into a uint64 (little-endian).
+// Bytes beyond len(s) are zero.
+func loadPrefix8(s string) uint64 {
+	var b [8]byte
+	n := len(s)
+	if n > 8 {
+		n = 8
+	}
+	copy(b[:], s[:n])
+	return *(*uint64)(unsafe.Pointer(&b[0]))
 }
 
 func buildStructDecoder(t reflect.Type) typedDecodeFn {
@@ -43,10 +54,11 @@ func buildStructDecoder(t reflect.Type) typedDecodeFn {
 			}
 		}
 		plan.fields = append(plan.fields, structField{
-			name:     name,
-			nameHash: fnv1a(name),
-			offset:   f.Offset,
-			dec:      cachedDecoder(f.Type),
+			name:    name,
+			prefix:  loadPrefix8(name),
+			nameLen: len(name),
+			offset:  f.Offset,
+			dec:     cachedDecoder(f.Type),
 		})
 	}
 	return func(d *decoder, p unsafe.Pointer) error {
@@ -86,12 +98,28 @@ func decodeStruct(d *decoder, p unsafe.Pointer, plan *structPlan) error {
 			return syntaxErr("expected ':'", d.p)
 		}
 		d.p++
-		// lookup: linear scan with length+hash filter.
-		h := fnv1aBytes(key)
+		// Field dispatch: first 8 bytes of the key loaded as uint64, then
+		// linear-scan comparing (prefix, length) against each field.
+		// When name length > 8, also compare the tail. This kills the
+		// fnv1aBytes hot spot (was ~4 % CPU on struct decode) and
+		// collapses the check to a pointer-sized compare.
+		klen := len(key)
+		var kb [8]byte
+		if klen >= 8 {
+			*(*uint64)(unsafe.Pointer(&kb[0])) = *(*uint64)(unsafe.Pointer(&key[0]))
+		} else {
+			copy(kb[:], key)
+		}
+		kprefix := *(*uint64)(unsafe.Pointer(&kb[0]))
 		found := false
 		for i := range plan.fields {
 			f := &plan.fields[i]
-			if f.nameHash == h && len(f.name) == len(key) && f.name == b2sUnsafe(key) {
+			if f.prefix != kprefix || f.nameLen != klen {
+				continue
+			}
+			// length + prefix match. If the name fits in 8 bytes,
+			// that's conclusive; otherwise compare the tail.
+			if klen <= 8 || f.name[8:] == b2sUnsafe(key[8:]) {
 				if err := f.dec(d, unsafe.Add(p, f.offset)); err != nil {
 					return err
 				}
@@ -280,29 +308,3 @@ func (d *decoder) skipContainer() error {
 	return syntaxErr("unterminated container", p)
 }
 
-// fnv1a over a Go string.
-func fnv1a(s string) uint64 {
-	const (
-		offset64 = 14695981039346656037
-		prime64  = 1099511628211
-	)
-	h := uint64(offset64)
-	for i := 0; i < len(s); i++ {
-		h ^= uint64(s[i])
-		h *= prime64
-	}
-	return h
-}
-
-func fnv1aBytes(b []byte) uint64 {
-	const (
-		offset64 = 14695981039346656037
-		prime64  = 1099511628211
-	)
-	h := uint64(offset64)
-	for i := 0; i < len(b); i++ {
-		h ^= uint64(b[i])
-		h *= prime64
-	}
-	return h
-}

@@ -15,9 +15,13 @@ type eface struct {
 // Capture the runtime type descriptors for primitive types. We extract them
 // from a boxed zero value via the internal iface layout.
 var (
-	typeFloat64 unsafe.Pointer
-	typeBool    unsafe.Pointer
-	typeString  unsafe.Pointer
+	typeFloat64            unsafe.Pointer
+	typeBool               unsafe.Pointer
+	typeString             unsafe.Pointer
+	typeMapStringInterface unsafe.Pointer
+	typeSliceInterface     unsafe.Pointer
+	typeInt                unsafe.Pointer
+	typeInt64              unsafe.Pointer
 	// cached immutable singletons
 	ifaceTrue  interface{} = true
 	ifaceFalse interface{} = false
@@ -35,7 +39,19 @@ func init() {
 	var si interface{} = "a"
 	typeString = (*eface)(unsafe.Pointer(&si)).typ
 
-	_ = reflect.TypeOf // keep reflect import live for future tweaks
+	var mi interface{} = map[string]interface{}{}
+	typeMapStringInterface = (*eface)(unsafe.Pointer(&mi)).typ
+
+	var sli interface{} = []interface{}{}
+	typeSliceInterface = (*eface)(unsafe.Pointer(&sli)).typ
+
+	var ii interface{} = int(0)
+	typeInt = (*eface)(unsafe.Pointer(&ii)).typ
+
+	var i64 interface{} = int64(0)
+	typeInt64 = (*eface)(unsafe.Pointer(&i64)).typ
+
+	_ = reflect.TypeOf
 }
 
 // ifaceFromFloat64Ptr builds an interface{} that holds a float64 stored at

@@ -127,8 +127,17 @@ func (d *decoder) scanNumber() (float64, error) {
 		}
 	}
 	_ = hasExp
-	// Slow path: re-parse the entire slice via strconv. Both int and float
-	// JSON literals are legal for strconv.ParseFloat.
+	// Eisel-Lemire fast path — uses the mantissa and decimal exponent
+	// already extracted above. Avoids strconv.ParseFloat's redundant
+	// digit scan (was 25 % of canada decode CPU). Only valid when we
+	// haven't overflowed the uint64 mantissa. Returns ok=false when the
+	// answer is round-ambiguous; we then fall back to strconv.
+	if !tooManyDigits {
+		if f, ok := eiselLemire64(mant, effExp, neg); ok {
+			return f, nil
+		}
+	}
+	// True slow path for ambiguous / too-many-digits cases.
 	f, err := strconv.ParseFloat(b2sUnsafe(b[start:p]), 64)
 	if err != nil {
 		return 0, syntaxErr("invalid number", start)
