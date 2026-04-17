@@ -2,9 +2,9 @@
 
 #include "textflag.h"
 
-// func skipWSAVX512(p *byte, n int) int
+// func skipWSSIMD(p *byte, n int) int
 // Requires: AVX, AVX512BW, AVX512F, BMI
-TEXT ·skipWSAVX512(SB), NOSPLIT, $0-24
+TEXT ·skipWSSIMD(SB), NOSPLIT, $0-24
 	MOVQ         p+0(FP), AX
 	MOVQ         n+8(FP), CX
 	XORQ         DX, DX

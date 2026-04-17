@@ -1,12 +1,16 @@
-//go:build !amd64
+//go:build !amd64 && !arm64
 
 package fastjson
 
-func scanStringAVX512(p *byte, n int) int {
-	// Should never be called outside amd64 (guarded by hasAVX512).
+// hasFastScan is false on arches without a SIMD string-scan kernel.
+// Call sites gate on this before invoking scanStringSIMD / skipWSSIMD,
+// so the zero-returning stubs below are defensive only.
+const hasFastScan = false
+
+func scanStringSIMD(p *byte, n int) int {
 	return 0
 }
 
-func skipWSAVX512(p *byte, n int) int {
+func skipWSSIMD(p *byte, n int) int {
 	return 0
 }

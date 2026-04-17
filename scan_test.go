@@ -35,7 +35,7 @@ func TestScanString(t *testing.T) {
 	}
 }
 
-func BenchmarkScanStringAVX512(b *testing.B) {
+func BenchmarkScanStringSIMD(b *testing.B) {
 	s := strings.Repeat("the quick brown fox ", 50) // 1000 bytes clean
 	p := unsafe.Pointer(unsafe.StringData(s))
 	n := len(s)
@@ -43,7 +43,7 @@ func BenchmarkScanStringAVX512(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = scanStringAVX512((*byte)(p), n)
+		_ = scanStringSIMD((*byte)(p), n)
 	}
 }
 
@@ -61,7 +61,7 @@ func BenchmarkScanStringSWAR(b *testing.B) {
 
 // --- skipWS kernel ---
 
-func TestSkipWSAVX512(t *testing.T) {
+func TestSkipWSSIMD(t *testing.T) {
 	cases := []struct {
 		s    string
 		want int
@@ -82,13 +82,13 @@ func TestSkipWSAVX512(t *testing.T) {
 		if n > 0 {
 			p = unsafe.StringData(c.s)
 		}
-		if got := skipWSAVX512(p, n); got != c.want {
+		if got := skipWSSIMD(p, n); got != c.want {
 			t.Errorf("case %d (%q): got %d, want %d", i, c.s, got, c.want)
 		}
 	}
 }
 
-func BenchmarkSkipWSAVX512(b *testing.B) {
+func BenchmarkSkipWSSIMD(b *testing.B) {
 	s := strings.Repeat("  \t\n  \t\n  \t\n  \t\n", 64) + "end" // 1024 WS + 3 bytes
 	p := unsafe.StringData(s)
 	n := len(s)
@@ -96,7 +96,7 @@ func BenchmarkSkipWSAVX512(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = skipWSAVX512(p, n)
+		_ = skipWSSIMD(p, n)
 	}
 }
 

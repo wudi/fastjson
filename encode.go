@@ -76,8 +76,8 @@ func (e *encoder) writeString(s string) {
 		return
 	}
 	var i int
-	if hasAVX512 && n >= 64 {
-		i = scanStringAVX512(unsafe.StringData(s), n)
+	if hasFastScan && n >= 64 {
+		i = scanStringSIMD(unsafe.StringData(s), n)
 	} else {
 		// Inline 8-byte SWAR scan.
 		sp := unsafe.StringData(s)

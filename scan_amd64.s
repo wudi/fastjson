@@ -2,9 +2,9 @@
 
 #include "textflag.h"
 
-// func scanStringAVX512(p *byte, n int) int
+// func scanStringSIMD(p *byte, n int) int
 // Requires: AVX, AVX512BW, AVX512F, BMI
-TEXT ·scanStringAVX512(SB), NOSPLIT, $0-24
+TEXT ·scanStringSIMD(SB), NOSPLIT, $0-24
 	MOVQ         p+0(FP), AX
 	MOVQ         n+8(FP), CX
 	XORQ         DX, DX

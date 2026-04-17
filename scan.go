@@ -2,24 +2,30 @@ package fastjson
 
 import (
 	"unsafe"
-
-	"github.com/klauspost/cpuid/v2"
 )
 
-// hasAVX512 is set once at init based on runtime CPU features. Goroutine-
-// safe to read.
-var hasAVX512 = cpuid.CPU.Supports(cpuid.AVX512F, cpuid.AVX512BW)
+// hasFastScan reports whether the host has a SIMD string-scan kernel
+// available. Defined per-arch:
+//   - amd64: runtime cpuid check for AVX-512 BW (scan_amd64.go)
+//   - arm64: unconditionally true — NEON is mandatory in ARMv8-A
+//     (scan_arm64.go)
+//   - other arches: false (scan_other.go)
+//
+// The matching SIMD kernels are scanStringSIMD and skipWSSIMD, whose
+// implementations live in the per-arch .s files (AVX-512BW on amd64,
+// NEON on arm64). On arches without a kernel, the stubs in
+// scan_other.go return 0 and are never reached since hasFastScan is
+// false.
 
 // scanString returns the offset of the first byte in p[0:n] that is '"',
 // '\\', or < 0x20. Returns n if none found.
 //
-// When AVX-512BW is available on amd64, dispatches to an assembly kernel
-// that scans 64 bytes per instruction (see scan_amd64.s). Otherwise falls
-// back to an 8-byte SWAR scan identical to the one embedded in
-// decodeString / writeString before this kernel existed.
+// Dispatches to the SIMD kernel when hasFastScan is true and n >= 64
+// (threshold amortises the broadcast/zeroupper setup cost). Falls back
+// to an 8-byte SWAR scan otherwise.
 func scanString(p unsafe.Pointer, n int) int {
-	if hasAVX512 && n >= 64 {
-		return scanStringAVX512((*byte)(p), n)
+	if hasFastScan && n >= 64 {
+		return scanStringSIMD((*byte)(p), n)
 	}
 	return scanStringSWAR(p, n)
 }

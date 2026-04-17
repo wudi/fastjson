@@ -97,8 +97,8 @@ func skipWSFast(b []byte, p int) int {
 // asm kernel; otherwise scalar.
 func skipWSDeep(b []byte, p int) int {
 	remain := len(b) - p
-	if hasAVX512 && remain >= 64 {
-		return p + skipWSAVX512(&b[p], remain)
+	if hasFastScan && remain >= 64 {
+		return p + skipWSSIMD(&b[p], remain)
 	}
 	for p < len(b) {
 		c := b[p]
@@ -288,8 +288,8 @@ func (d *decoder) decodeString() (string, error) {
 	remain := len(b) - p
 	// Threshold chosen so the AVX-512 kernel pays off (VPBROADCASTB setup
 	// + function call overhead). Below 64, use inline 8-byte SWAR.
-	if hasAVX512 && remain >= 64 {
-		off := scanStringAVX512(&b[p], remain)
+	if hasFastScan && remain >= 64 {
+		off := scanStringSIMD(&b[p], remain)
 		p += off
 	} else {
 		for p+8 <= len(b) {

@@ -161,8 +161,8 @@ func (d *decoder) decodeStringRaw() ([]byte, error) {
 	p++
 	start := p
 	remain := len(b) - p
-	if hasAVX512 && remain >= 64 {
-		off := scanStringAVX512(&b[p], remain)
+	if hasFastScan && remain >= 64 {
+		off := scanStringSIMD(&b[p], remain)
 		p += off
 	} else {
 		for p+8 <= len(b) {
