@@ -44,6 +44,7 @@ package fastjson
 import (
 	"math"
 	"math/bits"
+	"unsafe"
 )
 
 const (
@@ -55,6 +56,33 @@ const (
 	f64InfNanExp  = 0x7FF
 	f64HiddenBit  = 0x0010000000000000
 )
+
+// digits100 is the two-ASCII-byte lookup for 00..99 packed as uint16
+// (little-endian). `digits100[k]` equals `uint16(digits[2k]) | uint16(digits[2k+1])<<8`
+// — so a single 2-byte store puts the tens/ones digit pair at a buffer
+// position. On amd64 this is one `movw` vs. the two `movb`s the compiler
+// emits for the byte-array form (halves the store count in the digit
+// emission inner loop).
+var digits100 = [100]uint16{
+	0x3030, 0x3130, 0x3230, 0x3330, 0x3430, 0x3530, 0x3630, 0x3730, 0x3830, 0x3930,
+	0x3031, 0x3131, 0x3231, 0x3331, 0x3431, 0x3531, 0x3631, 0x3731, 0x3831, 0x3931,
+	0x3032, 0x3132, 0x3232, 0x3332, 0x3432, 0x3532, 0x3632, 0x3732, 0x3832, 0x3932,
+	0x3033, 0x3133, 0x3233, 0x3333, 0x3433, 0x3533, 0x3633, 0x3733, 0x3833, 0x3933,
+	0x3034, 0x3134, 0x3234, 0x3334, 0x3434, 0x3534, 0x3634, 0x3734, 0x3834, 0x3934,
+	0x3035, 0x3135, 0x3235, 0x3335, 0x3435, 0x3535, 0x3635, 0x3735, 0x3835, 0x3935,
+	0x3036, 0x3136, 0x3236, 0x3336, 0x3436, 0x3536, 0x3636, 0x3736, 0x3836, 0x3936,
+	0x3037, 0x3137, 0x3237, 0x3337, 0x3437, 0x3537, 0x3637, 0x3737, 0x3837, 0x3937,
+	0x3038, 0x3138, 0x3238, 0x3338, 0x3438, 0x3538, 0x3638, 0x3738, 0x3838, 0x3938,
+	0x3039, 0x3139, 0x3239, 0x3339, 0x3439, 0x3539, 0x3639, 0x3739, 0x3839, 0x3939,
+}
+
+// storeW2 writes the two-byte digit pair for k ∈ [0,99] at buf[i..i+2].
+// The caller must ensure i+1 is in-bounds; the store is unsafe.
+//
+//go:nosplit
+func storeW2(buf *byte, i int, k uint32) {
+	*(*uint16)(unsafe.Pointer(uintptr(unsafe.Pointer(buf)) + uintptr(i))) = digits100[k]
+}
 
 // digits is the two-ASCII-byte lookup for 00..99. `digits[2k]` and
 // `digits[2k+1]` are the tens and ones digit of k respectively.
@@ -276,35 +304,73 @@ func writeDigits(sig uint64, dst []byte, cnt int, trimTrailingZeros bool) int {
 	return cnt - ctz
 }
 
-// appendNBytes extends out by n zero bytes and returns (out, startIndex).
-func appendNBytes(out []byte, n int) ([]byte, int) {
-	start := len(out)
-	for i := 0; i < n; i++ {
-		out = append(out, 0)
+// writeDigitsStack emits cnt decimal digits of sig into buf[0:cnt]
+// (most-significant first) with compile-proven bounds on a fixed-size
+// stack array. When trim is true, collapses a trailing 8-zero block.
+// Returns the number of digits actually written (cnt or cnt-8).
+//
+// Uses the packed uint16 `digits100` LUT to emit two ASCII digits per
+// 16-bit store (one `movw`), halving the store count vs. per-byte lookup.
+func writeDigitsStack(sig uint64, buf *[24]byte, cnt int, trim bool) int {
+	base := (*byte)(unsafe.Pointer(&buf[0]))
+	p := cnt
+	ctz := 0
+	if (sig >> 32) != 0 {
+		q := sig / 100000000
+		r := uint32(sig) - 100000000*uint32(q)
+		sig = q
+		if trim && r == 0 {
+			ctz = 8
+		} else {
+			c := r % 10000
+			d := r / 10000
+			storeW2(base, p-2, c%100)
+			storeW2(base, p-4, c/100)
+			storeW2(base, p-6, d%100)
+			storeW2(base, p-8, d/100)
+		}
+		p -= 8
 	}
-	return out, start
+	sig2 := uint32(sig)
+	for sig2 >= 10000 {
+		r := sig2 - 10000*(sig2/10000)
+		sig2 /= 10000
+		storeW2(base, p-2, r%100)
+		storeW2(base, p-4, r/100)
+		p -= 4
+	}
+	if sig2 >= 100 {
+		storeW2(base, p-2, sig2%100)
+		sig2 /= 100
+		p -= 2
+	}
+	if sig2 >= 10 {
+		storeW2(base, p-2, sig2)
+	} else {
+		buf[0] = byte('0' + sig2)
+	}
+	return cnt - ctz
+}
+
+// zeroPad is a reusable buffer of ASCII '0' bytes for padding
+// leading/trailing zeros via a single append.
+var zeroPad = [32]byte{
+	'0', '0', '0', '0', '0', '0', '0', '0',
+	'0', '0', '0', '0', '0', '0', '0', '0',
+	'0', '0', '0', '0', '0', '0', '0', '0',
+	'0', '0', '0', '0', '0', '0', '0', '0',
 }
 
 // formatExponent writes v in scientific form: d.dddde±NN. Appends to
 // out and returns the extended slice.
 func formatExponent(dec schubfachDec, out []byte, cnt int) []byte {
-	// Write cnt significand digits into a scratch area past out's end,
-	// then reorder to put the first digit before the '.'.
-	out, start := appendNBytes(out, cnt)
-	n := writeDigits(dec.sig, out[start:start+cnt], cnt, true)
-	// out[start:start+n] now contains the trimmed significand digits.
-	// We want: out[start] = first digit, out[start+1] = '.',
-	// out[start+2 ...] = rest of significand.
+	var buf [24]byte
+	n := writeDigitsStack(dec.sig, &buf, cnt, true)
+	// buf[0] is the leading digit; buf[1:n] is the rest. Insert '.' between.
+	out = append(out, buf[0])
 	if n > 1 {
-		// Move digits [start+1 : start+n] right by 1 to make room for '.'.
-		// But since all live bytes are within [start:start+cnt] and
-		// start+cnt might equal len(out), we need to grow.
-		out = append(out, 0)
-		copy(out[start+2:], out[start+1:start+n])
-		out[start+1] = '.'
-		out = out[:start+n+1] // first-digit + '.' + (n-1) digits
-	} else {
-		out = out[:start+1] // just the single digit
+		out = append(out, '.')
+		out = append(out, buf[1:n]...)
 	}
 	out = append(out, 'e')
 	exp := dec.exp + int32(cnt) - 1
@@ -328,40 +394,35 @@ func formatExponent(dec schubfachDec, out []byte, cnt int) []byte {
 }
 
 // formatDecimal writes v in fixed-point notation with a decimal point.
+// Uses a 24-byte stack scratch so the significand digits are emitted
+// once into compile-proven bounds, then blitted into `out` in a single
+// append per segment — no post-hoc shift-copy to insert '.'.
 func formatDecimal(dec schubfachDec, out []byte, cnt int) []byte {
+	var buf [24]byte
+	n := writeDigitsStack(dec.sig, &buf, cnt, true)
 	point := cnt + int(dec.exp)
 
 	if point <= 0 {
-		// "0.000…0dddd" — leading zero, point, -point leading-zero fraction.
+		// "0.000…0dddd" — one '0', '.', -point zeros, then significand.
 		out = append(out, '0', '.')
-		for i := 0; i < -point; i++ {
-			out = append(out, '0')
+		if -point > 0 {
+			out = append(out, zeroPad[:-point]...)
 		}
-		out, start := appendNBytes(out, cnt)
-		n := writeDigits(dec.sig, out[start:start+cnt], cnt, true)
-		return out[:start+n]
+		return append(out, buf[:n]...)
 	}
 
-	// point > 0: integer part has `point` digits. Significand has `cnt`
-	// digits total; if cnt > point, fraction exists.
-	out, start := appendNBytes(out, cnt)
-	n := writeDigits(dec.sig, out[start:start+cnt], cnt, true)
-	// out[start:start+n] holds the significand (trailing zeros trimmed).
-	end := start + n
 	if n > point {
-		// Insert '.' at out[start+point], shifting [start+point:end] right 1.
-		out = append(out, 0)
-		copy(out[start+point+1:], out[start+point:end])
-		out[start+point] = '.'
-		end++
-	} else {
-		// Pad integer part with zeros (n <= point).
-		for i := 0; i < point-n; i++ {
-			out = append(out, '0')
-			end++
-		}
+		// integer part [0:point], '.', fraction [point:n]
+		out = append(out, buf[:point]...)
+		out = append(out, '.')
+		return append(out, buf[point:n]...)
 	}
-	return out[:end]
+	// n <= point: pad integer part with zeros after the significand.
+	out = append(out, buf[:n]...)
+	if point-n > 0 {
+		out = append(out, zeroPad[:point-n]...)
+	}
+	return out
 }
 
 // writeDec is the Schubfach "format decision" wrapper: pick scientific
@@ -380,10 +441,11 @@ func writeDec(dec schubfachDec, out []byte) []byte {
 		return formatDecimal(dec, out, cnt)
 	}
 	// Pure integer (possibly trailing zeros to reach `dot` width).
-	out, start := appendNBytes(out, dot)
-	writeDigits(dec.sig, out[start:start+cnt], cnt, false)
-	for i := start + cnt; i < start+dot; i++ {
-		out[i] = '0'
+	var buf [24]byte
+	writeDigitsStack(dec.sig, &buf, cnt, false)
+	out = append(out, buf[:cnt]...)
+	if dot > cnt {
+		out = append(out, zeroPad[:dot-cnt]...)
 	}
 	return out
 }
@@ -424,9 +486,9 @@ func schubfachAppendFloat64(out []byte, f float64) []byte {
 			if c&mask == 0 {
 				u := c >> uint(e)
 				cnt := ctz10(u)
-				out, start := appendNBytes(out, cnt)
-				writeDigits(u, out[start:start+cnt], cnt, false)
-				return out
+				var buf [24]byte
+				writeDigitsStack(u, &buf, cnt, false)
+				return append(out, buf[:cnt]...)
 			}
 		}
 	} else {
