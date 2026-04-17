@@ -58,3 +58,63 @@ func BenchmarkScanStringSWAR(b *testing.B) {
 		_ = scanStringSWAR(p, n)
 	}
 }
+
+// --- skipWS kernel ---
+
+func TestSkipWSAVX512(t *testing.T) {
+	cases := []struct {
+		s    string
+		want int
+	}{
+		{"   \t\n\rhello", 6},
+		{"", 0},
+		{"x", 0},
+		{"   ", 3},
+		{strings.Repeat(" ", 100) + "x", 100},
+		{strings.Repeat(" ", 64) + "hello", 64},
+		{strings.Repeat(" ", 63) + "hello", 63},
+		{strings.Repeat(" ", 65) + "hello", 65},
+		{strings.Repeat("\t\n\r ", 32) + "x", 128},
+	}
+	for i, c := range cases {
+		n := len(c.s)
+		var p *byte
+		if n > 0 {
+			p = unsafe.StringData(c.s)
+		}
+		if got := skipWSAVX512(p, n); got != c.want {
+			t.Errorf("case %d (%q): got %d, want %d", i, c.s, got, c.want)
+		}
+	}
+}
+
+func BenchmarkSkipWSAVX512(b *testing.B) {
+	s := strings.Repeat("  \t\n  \t\n  \t\n  \t\n", 64) + "end" // 1024 WS + 3 bytes
+	p := unsafe.StringData(s)
+	n := len(s)
+	b.SetBytes(int64(n))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = skipWSAVX512(p, n)
+	}
+}
+
+func BenchmarkSkipWSScalar(b *testing.B) {
+	s := strings.Repeat("  \t\n  \t\n  \t\n  \t\n", 64) + "end"
+	n := len(s)
+	b.SetBytes(int64(n))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		p := 0
+		for p < n {
+			c := s[p]
+			if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+				break
+			}
+			p++
+		}
+		_ = p
+	}
+}

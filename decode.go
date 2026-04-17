@@ -73,9 +73,33 @@ func (d *decoder) trailing() error {
 
 // -------- Whitespace / structural --------
 
+// skipWS is the method form of skipWSFast. Kept tiny so the compiler
+// inlines it — otherwise the per-call cost cascades through all the
+// typed decoders that call d.skipWS() per field.
 func (d *decoder) skipWS() {
-	b := d.data
-	p := d.p
+	d.p = skipWSFast(d.data, d.p)
+}
+
+// skipWSFast is the inline-friendly fast path. All JSON whitespace bytes
+// (space, tab, LF, CR) are ≤ 0x20; any byte > 0x20 is definitely non-WS.
+// That single compare is enough for the fast case (compact JSON, struct-
+// field boundaries) and keeps the function small enough to inline.
+// If the current byte could be WS we hand off to skipWSDeep.
+func skipWSFast(b []byte, p int) int {
+	if p < len(b) && b[p] > ' ' {
+		return p
+	}
+	return skipWSDeep(b, p)
+}
+
+// skipWSDeep consumes whitespace bytes starting at p. For long runs
+// (≥ 64 bytes remaining and AVX-512 available) we dispatch to the
+// asm kernel; otherwise scalar.
+func skipWSDeep(b []byte, p int) int {
+	remain := len(b) - p
+	if hasAVX512 && remain >= 64 {
+		return p + skipWSAVX512(&b[p], remain)
+	}
 	for p < len(b) {
 		c := b[p]
 		if c != ' ' && c != '\n' && c != '\t' && c != '\r' {
@@ -83,22 +107,14 @@ func (d *decoder) skipWS() {
 		}
 		p++
 	}
-	d.p = p
+	return p
 }
 
 // -------- Generic decodeAny (returns interface{}) --------
 
 func (d *decoder) decodeAny() (interface{}, error) {
-	// skip whitespace inline
 	b := d.data
-	p := d.p
-	for p < len(b) {
-		c := b[p]
-		if c != ' ' && c != '\n' && c != '\t' && c != '\r' {
-			break
-		}
-		p++
-	}
+	p := skipWSFast(b, d.p)
 	if p >= len(b) {
 		d.p = p
 		return nil, syntaxErr("unexpected end", p)
@@ -146,14 +162,7 @@ func (d *decoder) decodeAny() (interface{}, error) {
 func (d *decoder) decodeObject() (map[string]interface{}, error) {
 	d.p++
 	b := d.data
-	p := d.p
-	for p < len(b) {
-		c := b[p]
-		if c != ' ' && c != '\n' && c != '\t' && c != '\r' {
-			break
-		}
-		p++
-	}
+	p := skipWSFast(b, d.p)
 	if p < len(b) && b[p] == '}' {
 		d.p = p + 1
 		return map[string]interface{}{}, nil
@@ -170,14 +179,7 @@ func (d *decoder) decodeObject() (map[string]interface{}, error) {
 	d.p = p
 	for {
 		b = d.data
-		p = d.p
-		for p < len(b) {
-			c := b[p]
-			if c != ' ' && c != '\n' && c != '\t' && c != '\r' {
-				break
-			}
-			p++
-		}
+		p = skipWSFast(b, d.p)
 		if p >= len(b) || b[p] != '"' {
 			return nil, syntaxErr("expected string key", p)
 		}
@@ -187,14 +189,7 @@ func (d *decoder) decodeObject() (map[string]interface{}, error) {
 			return nil, err
 		}
 		b = d.data
-		p = d.p
-		for p < len(b) {
-			c := b[p]
-			if c != ' ' && c != '\n' && c != '\t' && c != '\r' {
-				break
-			}
-			p++
-		}
+		p = skipWSFast(b, d.p)
 		if p >= len(b) || b[p] != ':' {
 			return nil, syntaxErr("expected ':'", p)
 		}
@@ -205,14 +200,7 @@ func (d *decoder) decodeObject() (map[string]interface{}, error) {
 		}
 		m[key] = val
 		b = d.data
-		p = d.p
-		for p < len(b) {
-			c := b[p]
-			if c != ' ' && c != '\n' && c != '\t' && c != '\r' {
-				break
-			}
-			p++
-		}
+		p = skipWSFast(b, d.p)
 		if p >= len(b) {
 			return nil, syntaxErr("unexpected end in object", p)
 		}
@@ -231,15 +219,7 @@ func (d *decoder) decodeObject() (map[string]interface{}, error) {
 func (d *decoder) decodeArray() ([]interface{}, error) {
 	d.p++
 	b := d.data
-	// skip WS and check for empty array
-	p := d.p
-	for p < len(b) {
-		c := b[p]
-		if c != ' ' && c != '\n' && c != '\t' && c != '\r' {
-			break
-		}
-		p++
-	}
+	p := skipWSFast(b, d.p)
 	if p < len(b) && b[p] == ']' {
 		d.p = p + 1
 		return []interface{}{}, nil
@@ -252,16 +232,8 @@ func (d *decoder) decodeArray() ([]interface{}, error) {
 			return nil, err
 		}
 		arr = append(arr, val)
-		// inline skipWS and delimiter check
 		b = d.data
-		p = d.p
-		for p < len(b) {
-			c := b[p]
-			if c != ' ' && c != '\n' && c != '\t' && c != '\r' {
-				break
-			}
-			p++
-		}
+		p = skipWSFast(b, d.p)
 		if p >= len(b) {
 			return nil, syntaxErr("unexpected end in array", p)
 		}
