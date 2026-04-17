@@ -311,6 +311,10 @@ func writeDigits(sig uint64, dst []byte, cnt int, trimTrailingZeros bool) int {
 //
 // Uses the packed uint16 `digits100` LUT to emit two ASCII digits per
 // 16-bit store (one `movw`), halving the store count vs. per-byte lookup.
+//
+// This is the pure-Go implementation used on non-amd64 and for short
+// significands (cnt < 8) where the amd64 asm kernel's call overhead
+// would dominate. writeDigitsFast is the dispatch entry point.
 func writeDigitsStack(sig uint64, buf *[24]byte, cnt int, trim bool) int {
 	base := (*byte)(unsafe.Pointer(&buf[0]))
 	p := cnt
@@ -365,7 +369,7 @@ var zeroPad = [32]byte{
 // out and returns the extended slice.
 func formatExponent(dec schubfachDec, out []byte, cnt int) []byte {
 	var buf [24]byte
-	n := writeDigitsStack(dec.sig, &buf, cnt, true)
+	n := writeDigitsFast(dec.sig, &buf, cnt, true)
 	// buf[0] is the leading digit; buf[1:n] is the rest. Insert '.' between.
 	out = append(out, buf[0])
 	if n > 1 {
@@ -399,7 +403,7 @@ func formatExponent(dec schubfachDec, out []byte, cnt int) []byte {
 // append per segment — no post-hoc shift-copy to insert '.'.
 func formatDecimal(dec schubfachDec, out []byte, cnt int) []byte {
 	var buf [24]byte
-	n := writeDigitsStack(dec.sig, &buf, cnt, true)
+	n := writeDigitsFast(dec.sig, &buf, cnt, true)
 	point := cnt + int(dec.exp)
 
 	if point <= 0 {
@@ -442,7 +446,7 @@ func writeDec(dec schubfachDec, out []byte) []byte {
 	}
 	// Pure integer (possibly trailing zeros to reach `dot` width).
 	var buf [24]byte
-	writeDigitsStack(dec.sig, &buf, cnt, false)
+	writeDigitsFast(dec.sig, &buf, cnt, false)
 	out = append(out, buf[:cnt]...)
 	if dot > cnt {
 		out = append(out, zeroPad[:dot-cnt]...)
@@ -487,7 +491,7 @@ func schubfachAppendFloat64(out []byte, f float64) []byte {
 				u := c >> uint(e)
 				cnt := ctz10(u)
 				var buf [24]byte
-				writeDigitsStack(u, &buf, cnt, false)
+				writeDigitsFast(u, &buf, cnt, false)
 				return append(out, buf[:cnt]...)
 			}
 		}
