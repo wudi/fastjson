@@ -7,9 +7,9 @@ Avo-based source for the three amd64 assembly kernels in this package.
 From this directory:
 
 ```sh
-go run gen.go              -out ../scan_amd64.s        -pkg fastjson
-go run gen_skipws.go       -out ../skipws_amd64.s      -pkg fastjson
-go run gen_writedigits.go  -out ../writedigits_amd64.s -pkg fastjson
+go run gen.go              -out ../scan_amd64.s        -pkg jsonx
+go run gen_skipws.go       -out ../skipws_amd64.s      -pkg jsonx
+go run gen_writedigits.go  -out ../writedigits_amd64.s -pkg jsonx
 ```
 
 ## Kernels

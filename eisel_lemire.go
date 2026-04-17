@@ -5,7 +5,7 @@
 // Copyright 2020 The Go Authors — BSD 3-clause license (see LICENSE).
 // https://nigeltao.github.io/blog/2020/eisel-lemire.html
 
-package fastjson
+package jsonx
 
 import (
 	"math"

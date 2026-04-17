@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	sonic "github.com/bytedance/sonic"
-	fastjson "github.com/wudi/fastjson"
+	jsonx "github.com/wudi/jsonx"
 )
 
 // Extract every float64 value from canada.json into a flat slice so we can
@@ -82,11 +82,11 @@ func BenchmarkCanadaFloats_StdlibMarshal(b *testing.B) {
 	}
 }
 
-func BenchmarkCanadaFloats_FastjsonMarshal(b *testing.B) {
+func BenchmarkCanadaFloats_JsonxMarshal(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := fastjson.Marshal(canadaFloats); err != nil {
+		if _, err := jsonx.Marshal(canadaFloats); err != nil {
 			b.Fatal(err)
 		}
 	}

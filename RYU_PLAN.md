@@ -136,7 +136,7 @@ Phase 1 lands the oracle harness; phases 2-3 reuse it.
   top of `ryu_schubfach.go` (sonic does this).
 - **Go stdlib table** (`detailedPowersOfTen`): BSD-3-Clause. Attribution
   already present in `eisel_lemire.go` from E19; no new obligations.
-- fastjson's own license remains whatever we pick (MIT/Apache/BSD all
+- jsonx's own license remains whatever we pick (MIT/Apache/BSD all
   compatible with both of the above).
 
 ## Top risks

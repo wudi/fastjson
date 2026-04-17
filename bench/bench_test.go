@@ -8,7 +8,7 @@ import (
 
 	sonic "github.com/bytedance/sonic"
 	gojson "github.com/goccy/go-json"
-	fastjson "github.com/wudi/fastjson"
+	jsonx "github.com/wudi/jsonx"
 )
 
 // Corpus files live under ../testdata. We load all once at init time.
@@ -74,13 +74,13 @@ func BenchmarkDecodeInterface_Sonic(b *testing.B) {
 	}
 }
 
-func BenchmarkDecodeInterface_Fastjson(b *testing.B) {
+func BenchmarkDecodeInterface_Jsonx(b *testing.B) {
 	for _, name := range []string{"small.json", "twitter.json", "citm_catalog.json", "canada.json", "1_MB_10_Level_Formatted.json", "5_MB_10_Level_Formatted.json", "10_MB_10_Level_Formatted.json"} {
 		data := corpus[name]
 		b.Run(name, func(b *testing.B) {
 			runDecode(b, data, func(d []byte) error {
 				var v interface{}
-				return fastjson.Unmarshal(d, &v)
+				return jsonx.Unmarshal(d, &v)
 			})
 		})
 	}
@@ -108,11 +108,11 @@ func BenchmarkDecodeStruct_Sonic(b *testing.B) {
 		return sonic.Unmarshal(d, &v)
 	})
 }
-func BenchmarkDecodeStruct_Fastjson(b *testing.B) {
+func BenchmarkDecodeStruct_Jsonx(b *testing.B) {
 	data := corpus["small.json"]
 	runDecode(b, data, func(d []byte) error {
 		var v SmallUser
-		return fastjson.Unmarshal(d, &v)
+		return jsonx.Unmarshal(d, &v)
 	})
 }
 
@@ -165,11 +165,11 @@ func BenchmarkEncodeInterface_Sonic(b *testing.B) {
 		})
 	}
 }
-func BenchmarkEncodeInterface_Fastjson(b *testing.B) {
+func BenchmarkEncodeInterface_Jsonx(b *testing.B) {
 	for _, name := range []string{"small.json", "twitter.json", "citm_catalog.json", "canada.json", "1_MB_10_Level_Formatted.json", "5_MB_10_Level_Formatted.json", "10_MB_10_Level_Formatted.json"} {
 		v := loadInterface(name)
 		b.Run(name, func(b *testing.B) {
-			runEncode(b, v, func(v interface{}) ([]byte, error) { return fastjson.Marshal(v) })
+			runEncode(b, v, func(v interface{}) ([]byte, error) { return jsonx.Marshal(v) })
 		})
 	}
 }

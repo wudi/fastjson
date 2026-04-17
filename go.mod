@@ -1,4 +1,4 @@
-module github.com/wudi/fastjson
+module github.com/wudi/jsonx
 
 go 1.25.6
 

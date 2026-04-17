@@ -1,6 +1,6 @@
 //go:build !amd64 && !arm64
 
-package fastjson
+package jsonx
 
 // writeDigitsFast on non-amd64/non-arm64 is just the pure-Go path;
 // the asm kernel does not exist outside amd64 and arm64.

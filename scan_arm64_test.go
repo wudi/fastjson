@@ -1,6 +1,6 @@
 //go:build arm64
 
-package fastjson
+package jsonx
 
 import (
 	"strings"

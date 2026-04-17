@@ -1,6 +1,6 @@
 //go:build amd64
 
-package fastjson
+package jsonx
 
 import "testing"
 

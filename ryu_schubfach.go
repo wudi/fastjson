@@ -1,4 +1,4 @@
-// Package fastjson's Schubfach float64→string formatter.
+// Package jsonx's Schubfach float64→string formatter.
 //
 // Ported from ByteDance sonic's native/f64toa.c, which is in turn a port of
 // Alexander Bolz's Schubfach reference C++ implementation at
@@ -39,7 +39,7 @@
 // doubles" (2022-03-20). Schubfach is strictly shorter than Ryu for the
 // float64 shortest-representation problem — one 128-bit multiply plus a
 // round-odd step instead of Ryu's three multiplies plus exact-bits search.
-package fastjson
+package jsonx
 
 import (
 	"math"

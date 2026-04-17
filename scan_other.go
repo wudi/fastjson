@@ -1,6 +1,6 @@
 //go:build !amd64 && !arm64
 
-package fastjson
+package jsonx
 
 // hasFastScan is false on arches without a SIMD string-scan kernel.
 // Call sites gate on this before invoking scanStringSIMD / skipWSSIMD,

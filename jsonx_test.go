@@ -1,4 +1,4 @@
-package fastjson
+package jsonx
 
 import (
 	encjson "encoding/json"
@@ -40,7 +40,7 @@ func TestUnmarshalInterface(t *testing.T) {
 			}
 			var ours, stdlib interface{}
 			if err := Unmarshal(data, &ours); err != nil {
-				t.Fatalf("fastjson err: %v", err)
+				t.Fatalf("jsonx err: %v", err)
 			}
 			if err := encjson.Unmarshal(data, &stdlib); err != nil {
 				t.Fatal(err)

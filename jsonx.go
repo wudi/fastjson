@@ -1,8 +1,8 @@
-// Package fastjson is a high-performance JSON library with a drop-in
+// Package jsonx is a high-performance JSON library with a drop-in
 // encoding/json API. It targets beating bytedance/sonic on AMD64 with AVX-512
 // by using type-specialized decoders cached by reflect.Type, unsafe field
 // writes, SWAR structural scanning, and branchless number parsing.
-package fastjson
+package jsonx
 
 import (
 	"io"

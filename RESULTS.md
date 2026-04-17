@@ -1,4 +1,4 @@
-# fastjson — Autoresearch Results (Final, bold-path)
+# jsonx — Autoresearch Results (Final, bold-path)
 
 Starting from the "no asm / no CGO" constraint, then relaxing it after the user asked for a bold attempt.
 
@@ -38,7 +38,7 @@ Starting from the "no asm / no CGO" constraint, then relaxing it after the user 
 | Phase 1.5 | Refine `peekObjectHint` to fire only at the root object (`d.rootPeeked` flag), depth-track commas, skip strings with escape handling | Closes +128 to +143 % regression on 10-level formatted corpus while keeping E12's twitter win | ✓ |
 | Phase 2 | AVX-512 whitespace skipper (`skipWSAVX512`): VPBROADCASTB × 4 + VPCMPEQB × 4 + KORQ × 3 + KNOTQ + KTESTQ + TZCNTQ; integrated via `skipWSFast`/`skipWSDeep` (AVX-512 when remain ≥ 64, SWAR tail otherwise) | 10-level formatted decode moves into the ≥ 10 %-faster band; twitter/canada decode stable | ✓ |
 | Phase 3a | Stack-scratch + packed `[100]uint16` two-digit LUT in `writeDigitsStack`; fuses `appendNBytes`+`writeDigits`+dot-insert shift copy into a single append per segment | Canada float microbench 7.10 ms → 5.15 ms (**−27 %** in pure Go); all 7 encode corpora now ≥ 10 % faster than sonic | ✓ |
-| Phase 3b | amd64 asm kernel `writeDigitsAsm` (avo-generated): 1 DIV-by-1e8 splits top 8 digits, then unrolled IMUL3Q-based magic div-by-100 / div-by-10000 with MOVW stores into the packed LUT. Parity fuzz ([1,17] × 50 k random sigs × trim on/off) passes. Runtime `hasBMI2ADX` gate is wired for a future MULX+ADX roundOdd rewrite. | Canada encode: 5.76 → 5.55 ms, isolated float bench: fastjson **5.25 ms vs sonic 5.85 ms** (−10.2 %) | ✓ |
+| Phase 3b | amd64 asm kernel `writeDigitsAsm` (avo-generated): 1 DIV-by-1e8 splits top 8 digits, then unrolled IMUL3Q-based magic div-by-100 / div-by-10000 with MOVW stores into the packed LUT. Parity fuzz ([1,17] × 50 k random sigs × trim on/off) passes. Runtime `hasBMI2ADX` gate is wired for a future MULX+ADX roundOdd rewrite. | Canada encode: 5.76 → 5.55 ms, isolated float bench: jsonx **5.25 ms vs sonic 5.85 ms** (−10.2 %) | ✓ |
 | Phase 3c | **Iterative trailing-zero trim** on Schubfach significand: the reference round-odd step only does one upward pass, so values like −141.002991 were emitted as `-141.0029910000000` instead of `-141.002991`. Output still round-trips, but the "shortest" contract was violated. Loop now strips all trailing 10-divisors before formatting. | Output becomes bit-shortest (matches stdlib and sonic byte-for-byte on integer-ish floats); canada.json output drops several KB; encode canada (interface{}) −11.9 % vs sonic this run | ✓ |
 
 ## Compatibility
@@ -60,7 +60,7 @@ This is a 4-core cloud VM under variable load; run-to-run variance is ±15 % on 
 
 ### Decode `interface{}`
 
-| corpus | **sonic** best | **fastjson** best | Δ vs sonic |
+| corpus | **sonic** best | **jsonx** best | Δ vs sonic |
 |--------|---------------:|------------------:|-----------:|
 | small.json | 996 ns | **730 ns** | **−26.7 %** ✓ |
 | twitter.json | 2.30 ms | **1.90 ms** | **−17.5 %** ✓ |
@@ -74,13 +74,13 @@ This is a 4-core cloud VM under variable load; run-to-run variance is ±15 % on 
 | stdlib | 2076 | 13 | 472 |
 | goccy | 483 | 5 | 352 |
 | sonic | 481 | 4 | 339 |
-| **fastjson** | **397** | **3** | **200** |
+| **jsonx** | **397** | **3** | **200** |
 
-**fastjson is 17.6 % faster than sonic and 17.8 % faster than goccy on struct decode (best-of-5).** E16 (8-byte prefix field dispatch) is the main driver.
+**jsonx is 17.6 % faster than sonic and 17.8 % faster than goccy on struct decode (best-of-5).** E16 (8-byte prefix field dispatch) is the main driver.
 
 ### Encode `interface{}`
 
-| corpus | **sonic** best | **fastjson** best | Δ vs sonic |
+| corpus | **sonic** best | **jsonx** best | Δ vs sonic |
 |--------|---------------:|------------------:|-----------:|
 | small.json | 609 ns | **472 ns** | **−22.4 %** ✓ |
 | twitter.json | 1.12 ms | **982 µs** | **−12.3 %** ✓ |
@@ -93,7 +93,7 @@ Encoder allocates **1× per call** (final result copy) across every corpus. Soni
 
 After Phase 1 (Schubfach encode) + Phase 2 (AVX-512 WS skipper) + Phase 3 (amd64 digit asm + shortest-repr fix) + all earlier experiments. Best-of-2, `-benchtime=2s -count=2`, on 7 corpora:
 
-| benchmark | sonic best ns/op | fastjson best ns/op | Δ | ≥ 10 %? |
+| benchmark | sonic best ns/op | jsonx best ns/op | Δ | ≥ 10 %? |
 |-----------|-----------------:|--------------------:|---|---------|
 | **Decode small interface{}** | 715 | **515** | **−28.0 %** | ✓ |
 | **Decode twitter interface{}** | 1.61 ms | **1.41 ms** | **−12.2 %** | ✓ |
@@ -134,7 +134,7 @@ On the canada encode target specifically: **+12.6 % slower → −14.9 % faster*
 ## Repository layout
 
 - `program.md` — full experiment log E0 → E11.
-- `fastjson.go` — `encoding/json`-compatible public API (`Unmarshal`, `Marshal`, `Valid`, `NewDecoder`, `NewEncoder`).
+- `jsonx.go` — `encoding/json`-compatible public API (`Unmarshal`, `Marshal`, `Valid`, `NewDecoder`, `NewEncoder`).
 - `decode.go` / `decode_typed.go` / `decode_struct.go` — decoder + plan cache + struct plan.
 - `encode.go` / `encode_typed.go` — encoder + plan cache.
 - `float_fast.go` — Clinger fast-path parser.

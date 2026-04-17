@@ -1,4 +1,4 @@
-package fastjson
+package jsonx
 
 import (
 	"strings"

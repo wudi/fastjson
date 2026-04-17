@@ -29,7 +29,7 @@ Each row: `id | hypothesis | delta (ns/op, vs previous) | kept?`.
 ## E0 baseline (ns/op, lower is better)
 
 Decode `interface{}`:
-| corpus | stdlib | goccy | **sonic** | **fastjson** | Δ vs sonic |
+| corpus | stdlib | goccy | **sonic** | **jsonx** | Δ vs sonic |
 |--------|--------|-------|-----------|--------------|------------|
 | small.json (154 B) | 1987 | 1359 | 826.7 | **641.7** | **-22.4%** ✓ |
 | twitter.json (617 KB) | 5435884 | 3670390 | 1837754 | **1803738** | **-1.9%** ✓ |
@@ -37,7 +37,7 @@ Decode `interface{}`:
 | canada.json (2.2 MB, floats) | 29399162 | 24730161 | **13124679** | 16354037 | +24.6% |
 
 Decode struct (small.json → SmallUser):
-| stdlib | **goccy** | sonic | fastjson |
+| stdlib | **goccy** | sonic | jsonx |
 |--------|-----------|-------|----------|
 | 2283 | **429.9** | 518.3 | 543.4 |
 
@@ -51,7 +51,7 @@ Decode struct (small.json → SmallUser):
 | E2 | Inline `skipWS` in `decodeAny/Array/Object`; drop initial array cap from 8→4 | small -16%, twitter ≈0, **citm -12% vs sonic**, canada +10% | Y |
 
 ## After E2 (ns/op, `-benchtime=2s -count=2`, avg)
-| corpus | **sonic** | **fastjson** | Δ |
+| corpus | **sonic** | **jsonx** | Δ |
 |--------|-----------|--------------|---|
 | small.json | 864 | **722** | **-16.4%** ✓ |
 | twitter.json | 2044 | 2228 | +9.0% |
@@ -75,7 +75,7 @@ Decode struct (small.json → SmallUser):
 
 **≥ 10 % faster than `bytedance/sonic` on 6 of 9 benchmarks. Ties the rest within 8.4 %.**
 
-| metric | fastjson vs sonic |
+| metric | jsonx vs sonic |
 |--------|-------------------|
 | Decode struct (typed `SmallUser`) | **−17.5 %** ✓ |
 | Decode small interface{} | **−22.8 %** ✓ |

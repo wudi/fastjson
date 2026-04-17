@@ -1,4 +1,4 @@
-package fastjson
+package jsonx
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ type SyntaxError struct {
 }
 
 func (e *SyntaxError) Error() string {
-	return fmt.Sprintf("fastjson: %s at offset %d", e.Msg, e.Offset)
+	return fmt.Sprintf("jsonx: %s at offset %d", e.Msg, e.Offset)
 }
 
 type UnmarshalTypeError struct {
@@ -21,7 +21,7 @@ type UnmarshalTypeError struct {
 }
 
 func (e *UnmarshalTypeError) Error() string {
-	return fmt.Sprintf("fastjson: cannot unmarshal %s into Go value of type %s", e.Value, e.Type)
+	return fmt.Sprintf("jsonx: cannot unmarshal %s into Go value of type %s", e.Value, e.Type)
 }
 
 type InvalidUnmarshalError struct {
@@ -30,12 +30,12 @@ type InvalidUnmarshalError struct {
 
 func (e *InvalidUnmarshalError) Error() string {
 	if e.Type == nil {
-		return "fastjson: Unmarshal(nil)"
+		return "jsonx: Unmarshal(nil)"
 	}
 	if e.Type.Kind() != reflect.Ptr {
-		return fmt.Sprintf("fastjson: Unmarshal(non-pointer %s)", e.Type)
+		return fmt.Sprintf("jsonx: Unmarshal(non-pointer %s)", e.Type)
 	}
-	return fmt.Sprintf("fastjson: Unmarshal(nil %s)", e.Type)
+	return fmt.Sprintf("jsonx: Unmarshal(nil %s)", e.Type)
 }
 
 type UnsupportedTypeError struct {
@@ -43,7 +43,7 @@ type UnsupportedTypeError struct {
 }
 
 func (e *UnsupportedTypeError) Error() string {
-	return fmt.Sprintf("fastjson: unsupported type: %s", e.Type)
+	return fmt.Sprintf("jsonx: unsupported type: %s", e.Type)
 }
 
 func syntaxErr(msg string, off int) error {

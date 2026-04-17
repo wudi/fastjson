@@ -1,6 +1,6 @@
 //go:build arm64
 
-package fastjson
+package jsonx
 
 // hasFastScan is always true on arm64: NEON (Advanced SIMD) is
 // mandatory in the ARMv8-A base architecture that Go targets, so the

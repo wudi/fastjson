@@ -12,7 +12,7 @@
 // Eisel-Lemire in eisel_lemire.go): stdlib rounds *down* (floor), Schubfach
 // rounds *up* (ceil). The last bit can differ. Keep both tables.
 
-package fastjson
+package jsonx
 
 const (
 	schubfachKMin = -292
