@@ -35,6 +35,19 @@ func Marshal(v interface{}) ([]byte, error) {
 	return out, nil
 }
 
+// MarshalIndent is like Marshal but applies Indent to format the output.
+// Each JSON element in the output will begin on a new line beginning with
+// prefix followed by one or more copies of indent according to the
+// indentation nesting. It is API-compatible with encoding/json.
+func MarshalIndent(v interface{}, prefix, indent string) ([]byte, error) {
+	b, err := Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, len(b)+len(b)/8)
+	return appendIndented(out, b, prefix, indent), nil
+}
+
 // Valid reports whether data is a valid JSON encoding.
 func Valid(data []byte) bool {
 	d := decoderPool.Get().(*decoder)

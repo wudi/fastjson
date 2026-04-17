@@ -173,6 +173,72 @@ func (e *encoder) writeStringSlow(s string, start int) {
 
 var hexChar = "0123456789abcdef"
 
+// appendIndented reformats compact JSON from src into dst, inserting newlines,
+// prefix, and per-level indent matching encoding/json.Indent semantics. src is
+// assumed to be valid, compact JSON as produced by Marshal.
+func appendIndented(dst, src []byte, prefix, indent string) []byte {
+	depth := 0
+	inString := false
+	escape := false
+	needIndent := false
+	writeIndent := func(dst []byte, d int) []byte {
+		dst = append(dst, '\n')
+		dst = append(dst, prefix...)
+		for i := 0; i < d; i++ {
+			dst = append(dst, indent...)
+		}
+		return dst
+	}
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		if inString {
+			dst = append(dst, c)
+			if escape {
+				escape = false
+				continue
+			}
+			switch c {
+			case '\\':
+				escape = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		if needIndent && c != '}' && c != ']' {
+			dst = writeIndent(dst, depth)
+		}
+		needIndent = false
+		switch c {
+		case '"':
+			inString = true
+			dst = append(dst, c)
+		case '{', '[':
+			depth++
+			dst = append(dst, c)
+			needIndent = true
+		case '}', ']':
+			depth--
+			if n := len(dst); n > 0 && (dst[n-1] == '{' || dst[n-1] == '[') {
+				dst = append(dst, c)
+			} else {
+				dst = writeIndent(dst, depth)
+				dst = append(dst, c)
+			}
+		case ',':
+			dst = append(dst, c)
+			needIndent = true
+		case ':':
+			dst = append(dst, c, ' ')
+		case ' ', '\t', '\n', '\r':
+			// Marshal doesn't emit whitespace outside strings; ignore defensively.
+		default:
+			dst = append(dst, c)
+		}
+	}
+	return dst
+}
+
 // -------- number writing --------
 
 func (e *encoder) writeFloat(f float64, bits int) error {
