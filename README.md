@@ -2,10 +2,6 @@
 
 A high-performance JSON library for Go with a drop-in `encoding/json` API.
 
-`jsonx` targets `bytedance/sonic` on AMD64 with AVX-512 and falls back cleanly
-on every other platform. No CGO. No JIT. No reflection on the hot path after
-plan-cache warmup.
-
 ---
 
 ## Highlights
