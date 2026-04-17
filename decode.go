@@ -465,10 +465,18 @@ func (d *decoder) decodeNumberSlice() ([]byte, error) {
 	if p == s {
 		return nil, syntaxErr("invalid number", start)
 	}
+	// RFC 8259: leading zero must not be followed by more digits.
+	if b[s] == '0' && p-s > 1 {
+		return nil, syntaxErr("invalid number (leading zero)", start)
+	}
 	if p < len(b) && b[p] == '.' {
 		p++
+		fs := p
 		for p < len(b) && b[p] >= '0' && b[p] <= '9' {
 			p++
+		}
+		if p == fs {
+			return nil, syntaxErr("invalid number (no digits after '.')", start)
 		}
 	}
 	if p < len(b) && (b[p] == 'e' || b[p] == 'E') {
@@ -476,8 +484,12 @@ func (d *decoder) decodeNumberSlice() ([]byte, error) {
 		if p < len(b) && (b[p] == '+' || b[p] == '-') {
 			p++
 		}
+		es := p
 		for p < len(b) && b[p] >= '0' && b[p] <= '9' {
 			p++
+		}
+		if p == es {
+			return nil, syntaxErr("invalid exponent", start)
 		}
 	}
 	d.p = p

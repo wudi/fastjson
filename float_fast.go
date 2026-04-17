@@ -42,6 +42,11 @@ func (d *decoder) scanNumber() (float64, error) {
 	if p == intStart {
 		return 0, syntaxErr("invalid number", start)
 	}
+	// RFC 8259: a leading 0 in the integer part must not be followed by
+	// more digits ("01", "-01" are invalid).
+	if b[intStart] == '0' && p-intStart > 1 {
+		return 0, syntaxErr("invalid number (leading zero)", start)
+	}
 	frac := 0
 	if p < len(b) && b[p] == '.' {
 		p++
@@ -54,6 +59,9 @@ func (d *decoder) scanNumber() (float64, error) {
 			mant = mant*10 + uint64(c-'0')
 			digits++
 			p++
+		}
+		if p == fracStart {
+			return 0, syntaxErr("invalid number (no digits after '.')", start)
 		}
 		frac = p - fracStart
 	}
