@@ -42,7 +42,7 @@ corpus, experiment, and methodological caveat — lives in [RESULTS.md](RESULTS.
 go get github.com/wudi/jsonx
 ```
 
-Requires Go 1.25+.
+Requires Go 1.22+.
 
 ## Usage
 
