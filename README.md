@@ -2,8 +2,7 @@
 
 A high-performance JSON library for Go with a drop-in `encoding/json` API. 
 
-Powered by Claude + [autoresearch](https://github.com/karpathy/autoresearch) automation
-
+> Powered by AI + [autoresearch](https://github.com/karpathy/autoresearch) automation. I don't know how the fuck it works, but it’s fast as hell.
 ---
 
 ## Highlights
