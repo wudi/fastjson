@@ -31,8 +31,16 @@ func (d *decoder) reset(data []byte) {
 	d.scratch = d.scratch[:0]
 	d.rootPeeked = false
 	// reset slabs: drop references so GC can reclaim if no longer held.
-	d.fslab.buf = nil
-	d.sslab.buf = nil
+	// Zero out the slabs to prevent leftover bytes from confusing later decodes
+	// if pointers are aliased or uninitialized slice headers are read.
+	for i := range d.fslab.buf {
+		d.fslab.buf[i] = 0
+	}
+	for i := range d.sslab.buf {
+		d.sslab.buf[i] = ""
+	}
+	d.fslab.buf = d.fslab.buf[:0]
+	d.sslab.buf = d.sslab.buf[:0]
 }
 
 // decodeInto dispatches on the dynamic type of v.
@@ -93,11 +101,10 @@ func skipWSFast(b []byte, p int) int {
 }
 
 // skipWSDeep consumes whitespace bytes starting at p. For long runs
-// (≥ 64 bytes remaining and AVX-512 available) we dispatch to the
-// asm kernel; otherwise scalar.
+// (≥ 16 bytes remaining) we dispatch to the asm kernel; otherwise scalar.
 func skipWSDeep(b []byte, p int) int {
 	remain := len(b) - p
-	if hasFastScan && remain >= 64 {
+	if hasFastScan && remain >= 16 {
 		return p + skipWSSIMD(&b[p], remain)
 	}
 	for p < len(b) {
@@ -286,9 +293,8 @@ func (d *decoder) decodeString() (string, error) {
 	p++
 	start := p
 	remain := len(b) - p
-	// Threshold chosen so the AVX-512 kernel pays off (VPBROADCASTB setup
-	// + function call overhead). Below 64, use inline 8-byte SWAR.
-	if hasFastScan && remain >= 64 {
+	// Threshold chosen so the SIMD kernel pays off.
+	if hasFastScan && remain >= 16 {
 		off := scanStringSIMD(&b[p], remain)
 		p += off
 	} else {

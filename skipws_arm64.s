@@ -20,10 +20,11 @@ TEXT ·skipWSSIMD(SB), NOSPLIT, $0-24
 
 	MOVD ZR, R2
 
-	VMOVI $0x20, V1.B16                 // ' '
-	VMOVI $0x09, V3.B16                 // '\t'
-	VMOVI $0x0a, V5.B16                 // '\n'
-	VMOVI $0x0d, V7.B16                 // '\r'
+	// Broadcast constants once to high registers.
+	VMOVI $0x20, V24.B16                // ' '
+	VMOVI $0x09, V25.B16                // '\t'
+	VMOVI $0x0a, V26.B16                // '\n'
+	VMOVI $0x0d, V27.B16                // '\r'
 
 loop16:
 	SUB  R2, R1, R3
@@ -33,12 +34,12 @@ loop16:
 	ADD  R0, R2, R4
 	VLD1 (R4), [V0.B16]
 
-	VCMEQ V0.B16, V1.B16, V2.B16
-	VCMEQ V0.B16, V3.B16, V8.B16
+	VCMEQ V0.B16, V24.B16, V2.B16
+	VCMEQ V0.B16, V25.B16, V8.B16
 	VORR  V8.B16, V2.B16, V9.B16
-	VCMEQ V0.B16, V5.B16, V10.B16
+	VCMEQ V0.B16, V26.B16, V10.B16
 	VORR  V10.B16, V9.B16, V9.B16
-	VCMEQ V0.B16, V7.B16, V11.B16
+	VCMEQ V0.B16, V27.B16, V11.B16
 	VORR  V11.B16, V9.B16, V9.B16
 
 	// V9 byte lanes: 0xFF if WS, 0x00 otherwise. We want the first

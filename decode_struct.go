@@ -8,11 +8,12 @@ import (
 
 // structField holds the info needed to decode one field.
 type structField struct {
-	name    string // JSON name
-	prefix  uint64 // first min(8, len(name)) bytes, little-endian; zero-padded
-	nameLen int
-	offset  uintptr
-	dec     typedDecodeFn
+	name     string // JSON name
+	prefix   uint64 // first min(8, len(name)) bytes, little-endian; zero-padded
+	nameLen  int
+	offset   uintptr
+	dec      typedDecodeFn
+	isString bool
 }
 
 type structPlan struct {
@@ -54,11 +55,12 @@ func buildStructDecoder(t reflect.Type) typedDecodeFn {
 			}
 		}
 		plan.fields = append(plan.fields, structField{
-			name:    name,
-			prefix:  loadPrefix8(name),
-			nameLen: len(name),
-			offset:  f.Offset,
-			dec:     cachedDecoder(f.Type),
+			name:     name,
+			prefix:   loadPrefix8(name),
+			nameLen:  len(name),
+			offset:   f.Offset,
+			dec:      cachedDecoder(f.Type),
+			isString: f.Type.Kind() == reflect.String,
 		})
 	}
 	return func(d *decoder, p unsafe.Pointer) error {
@@ -83,6 +85,7 @@ func decodeStruct(d *decoder, p unsafe.Pointer, plan *structPlan) error {
 		d.p++
 		return nil
 	}
+	nextField := 0
 	for {
 		d.skipWS()
 		if d.p >= len(d.data) || d.data[d.p] != '"' {
@@ -98,35 +101,85 @@ func decodeStruct(d *decoder, p unsafe.Pointer, plan *structPlan) error {
 			return syntaxErr("expected ':'", d.p)
 		}
 		d.p++
-		// Field dispatch: first 8 bytes of the key loaded as uint64, then
-		// linear-scan comparing (prefix, length) against each field.
-		// When name length > 8, also compare the tail. This kills the
-		// fnv1aBytes hot spot (was ~4 % CPU on struct decode) and
-		// collapses the check to a pointer-sized compare.
+		// Field dispatch: first 8 bytes of the key loaded as uint64
 		klen := len(key)
-		var kb [8]byte
+		var kprefix uint64
 		if klen >= 8 {
-			*(*uint64)(unsafe.Pointer(&kb[0])) = *(*uint64)(unsafe.Pointer(&key[0]))
+			kprefix = *(*uint64)(unsafe.Pointer(&key[0]))
 		} else {
+			var kb [8]byte
 			copy(kb[:], key)
+			kprefix = *(*uint64)(unsafe.Pointer(&kb[0]))
 		}
-		kprefix := *(*uint64)(unsafe.Pointer(&kb[0]))
+
 		found := false
-		for i := range plan.fields {
-			f := &plan.fields[i]
-			if f.prefix != kprefix || f.nameLen != klen {
-				continue
-			}
-			// length + prefix match. If the name fits in 8 bytes,
-			// that's conclusive; otherwise compare the tail.
-			if klen <= 8 || f.name[8:] == b2sUnsafe(key[8:]) {
-				if err := f.dec(d, unsafe.Add(p, f.offset)); err != nil {
-					return err
+		// Try prediction
+		if nextField < len(plan.fields) {
+			f := &plan.fields[nextField]
+			if f.prefix == kprefix && f.nameLen == klen && (klen <= 8 || f.name[8:] == b2sUnsafe(key[8:])) {
+				if f.isString {
+					d.skipWS()
+					if d.p >= len(d.data) {
+						return syntaxErr("expected string", d.p)
+					}
+					if d.data[d.p] == 'n' {
+						if err := d.decodeNull(); err != nil {
+							return err
+						}
+						*(*string)(unsafe.Add(p, f.offset)) = ""
+					} else {
+						s, err := d.decodeString()
+						if err != nil {
+							return err
+						}
+						*(*string)(unsafe.Add(p, f.offset)) = string(s)
+					}
+				} else {
+					if err := f.dec(d, unsafe.Add(p, f.offset)); err != nil {
+						return err
+					}
 				}
 				found = true
-				break
+				nextField++
 			}
 		}
+
+		if !found {
+			for i := range plan.fields {
+				f := &plan.fields[i]
+				if f.prefix != kprefix || f.nameLen != klen {
+					continue
+				}
+				if klen <= 8 || f.name[8:] == b2sUnsafe(key[8:]) {
+					if f.isString {
+						d.skipWS()
+						if d.p >= len(d.data) {
+							return syntaxErr("expected string", d.p)
+						}
+						if d.data[d.p] == 'n' {
+							if err := d.decodeNull(); err != nil {
+								return err
+							}
+							*(*string)(unsafe.Add(p, f.offset)) = ""
+						} else {
+							s, err := d.decodeString()
+							if err != nil {
+								return err
+							}
+							*(*string)(unsafe.Add(p, f.offset)) = string(s)
+						}
+					} else {
+						if err := f.dec(d, unsafe.Add(p, f.offset)); err != nil {
+							return err
+						}
+					}
+					found = true
+					nextField = i + 1
+					break
+				}
+			}
+		}
+
 		if !found {
 			// skip value
 			if err := d.skipValue(); err != nil {
@@ -161,7 +214,7 @@ func (d *decoder) decodeStringRaw() ([]byte, error) {
 	p++
 	start := p
 	remain := len(b) - p
-	if hasFastScan && remain >= 64 {
+	if hasFastScan && remain >= 16 {
 		off := scanStringSIMD(&b[p], remain)
 		p += off
 	} else {
@@ -307,4 +360,3 @@ func (d *decoder) skipContainer() error {
 	}
 	return syntaxErr("unterminated container", p)
 }
-

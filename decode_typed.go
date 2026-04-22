@@ -341,6 +341,8 @@ func buildSliceDecoder(t reflect.Type) typedDecodeFn {
 		d.skipWS()
 		sh := (*sliceHeader)(p)
 		sh.Len = 0
+		sh.Cap = 0
+		sh.Data = nil
 		if d.p < len(d.data) && d.data[d.p] == ']' {
 			d.p++
 			return nil
@@ -387,10 +389,10 @@ func growSlice(sh *sliceHeader, elem reflect.Type, elemSize uintptr) {
 	// copy existing elements
 	if sh.Len > 0 {
 		src := unsafe.Slice((*byte)(sh.Data), sh.Len*int(elemSize))
-		dst := unsafe.Slice((*byte)(unsafe.Pointer(newSlice.Pointer())), sh.Len*int(elemSize))
+		dst := unsafe.Slice((*byte)(newSlice.UnsafePointer()), sh.Len*int(elemSize))
 		copy(dst, src)
 	}
-	sh.Data = unsafe.Pointer(newSlice.Pointer())
+	sh.Data = newSlice.UnsafePointer()
 	sh.Cap = newCap
 }
 
