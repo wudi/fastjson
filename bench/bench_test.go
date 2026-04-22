@@ -116,6 +116,52 @@ func BenchmarkDecodeStruct_Jsonx(b *testing.B) {
 	})
 }
 
+// ---- Struct decoding (1_MB_10_Level_Formatted.json → EmployeeData) ----
+func BenchmarkDecodeStructLarge_Stdlib(b *testing.B) {
+	for _, name := range []string{"1_MB_10_Level_Formatted.json", "5_MB_10_Level_Formatted.json", "10_MB_10_Level_Formatted.json"} {
+		data := corpus[name]
+		b.Run(name, func(b *testing.B) {
+			runDecode(b, data, func(d []byte) error {
+				var v EmployeeData
+				return encjson.Unmarshal(d, &v)
+			})
+		})
+	}
+}
+func BenchmarkDecodeStructLarge_Goccy(b *testing.B) {
+	for _, name := range []string{"1_MB_10_Level_Formatted.json", "5_MB_10_Level_Formatted.json", "10_MB_10_Level_Formatted.json"} {
+		data := corpus[name]
+		b.Run(name, func(b *testing.B) {
+			runDecode(b, data, func(d []byte) error {
+				var v EmployeeData
+				return gojson.Unmarshal(d, &v)
+			})
+		})
+	}
+}
+func BenchmarkDecodeStructLarge_Sonic(b *testing.B) {
+	for _, name := range []string{"1_MB_10_Level_Formatted.json", "5_MB_10_Level_Formatted.json", "10_MB_10_Level_Formatted.json"} {
+		data := corpus[name]
+		b.Run(name, func(b *testing.B) {
+			runDecode(b, data, func(d []byte) error {
+				var v EmployeeData
+				return sonic.Unmarshal(d, &v)
+			})
+		})
+	}
+}
+func BenchmarkDecodeStructLarge_Jsonx(b *testing.B) {
+	for _, name := range []string{"1_MB_10_Level_Formatted.json", "5_MB_10_Level_Formatted.json", "10_MB_10_Level_Formatted.json"} {
+		data := corpus[name]
+		b.Run(name, func(b *testing.B) {
+			runDecode(b, data, func(d []byte) error {
+				var v EmployeeData
+				return jsonx.Unmarshal(d, &v)
+			})
+		})
+	}
+}
+
 // ---- Encoding ----
 func runEncode(b *testing.B, v interface{}, enc func(v interface{}) ([]byte, error)) {
 	// probe size once
