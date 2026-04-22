@@ -1,6 +1,8 @@
 # jsonx
 
-A high-performance JSON library for Go with a drop-in `encoding/json` API.
+A high-performance JSON library for Go with a drop-in `encoding/json` API. 
+
+Powered by Claude + [autoresearch](https://github.com/karpathy/autoresearch) automation
 
 ---
 
@@ -219,3 +221,6 @@ this library's AVX-512 whitespace skipper.
 Prior art and comparators: [`bytedance/sonic`](https://github.com/bytedance/sonic),
 [`goccy/go-json`](https://github.com/goccy/go-json), and Go's
 [`encoding/json`](https://pkg.go.dev/encoding/json).
+
+## License
+MIT
