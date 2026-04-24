@@ -78,14 +78,20 @@ func decodeStruct(d *decoder, p unsafe.Pointer, plan *structPlan) error {
 		return syntaxErr("expected object", d.p)
 	}
 	d.p++
-	d.skipWS()
-	if d.p < len(d.data) && d.data[d.p] == '}' {
-		d.p++
-		return nil
-	}
+	// The per-iteration skipWS at the top of the loop also handles the
+	// whitespace between `{` and the first key (or the empty-object `}`),
+	// so we skip the redundant call that used to sit here.
 	for {
 		d.skipWS()
-		if d.p >= len(d.data) || d.data[d.p] != '"' {
+		if d.p >= len(d.data) {
+			return syntaxErr("unexpected end in struct", d.p)
+		}
+		c := d.data[d.p]
+		if c == '}' {
+			d.p++
+			return nil
+		}
+		if c != '"' {
 			return syntaxErr("expected key", d.p)
 		}
 		// Read key without allocation — slice alias is enough for lookup.
@@ -93,11 +99,17 @@ func decodeStruct(d *decoder, p unsafe.Pointer, plan *structPlan) error {
 		if err != nil {
 			return err
 		}
-		d.skipWS()
-		if d.p >= len(d.data) || d.data[d.p] != ':' {
-			return syntaxErr("expected ':'", d.p)
+		// Fast-path `:` directly adjacent to key (the common case). Fall
+		// to skipWS only if whitespace is actually present between them.
+		if d.p < len(d.data) && d.data[d.p] == ':' {
+			d.p++
+		} else {
+			d.skipWS()
+			if d.p >= len(d.data) || d.data[d.p] != ':' {
+				return syntaxErr("expected ':'", d.p)
+			}
+			d.p++
 		}
-		d.p++
 		// Field dispatch: first 8 bytes of the key loaded as uint64, then
 		// linear-scan comparing (prefix, length) against each field.
 		// When name length > 8, also compare the tail. This kills the
@@ -133,6 +145,19 @@ func decodeStruct(d *decoder, p unsafe.Pointer, plan *structPlan) error {
 				return err
 			}
 		}
+		// Fast-path the typical `"..."<,|}>` tail where whitespace is
+		// absent between the value and the structural character.
+		if d.p < len(d.data) {
+			c := d.data[d.p]
+			if c == ',' {
+				d.p++
+				continue
+			}
+			if c == '}' {
+				d.p++
+				return nil
+			}
+		}
 		d.skipWS()
 		if d.p >= len(d.data) {
 			return syntaxErr("unexpected end in struct", d.p)
@@ -160,10 +185,31 @@ func (d *decoder) decodeStringRaw() ([]byte, error) {
 	}
 	p++
 	start := p
-	remain := len(b) - p
-	if hasFastScan && remain >= 64 {
-		off := scanStringSIMD(&b[p], remain)
-		p += off
+	// SWAR prefix handles keys/short strings (≤16 bytes) without the
+	// scanStringSIMD call-overhead. Most struct keys and many string
+	// values fit in this window.
+	if p+16 <= len(b) {
+		w1 := *(*uint64)(unsafe.Pointer(&b[p]))
+		if !hasQuoteOrBackslashOrCtl(w1) {
+			w2 := *(*uint64)(unsafe.Pointer(&b[p+8]))
+			if !hasQuoteOrBackslashOrCtl(w2) {
+				p += 16
+				remain := len(b) - p
+				if hasFastScan && remain >= 64 {
+					p += scanStringSIMD(&b[p], remain)
+				} else {
+					for p+8 <= len(b) {
+						w := *(*uint64)(unsafe.Pointer(&b[p]))
+						if hasQuoteOrBackslashOrCtl(w) {
+							break
+						}
+						p += 8
+					}
+				}
+			} else {
+				p += 8
+			}
+		}
 	} else {
 		for p+8 <= len(b) {
 			w := *(*uint64)(unsafe.Pointer(&b[p]))

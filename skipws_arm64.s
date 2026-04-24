@@ -1,6 +1,14 @@
-// NEON arm64 port of the amd64 skipws_amd64.s. Finds the first
-// non-whitespace byte (not space/tab/LF/CR) in p[0:n], processing
-// 16 bytes per iteration via VCMEQ.
+// NEON arm64 skipWSSIMD. Finds the first byte > 0x20 in p[0:n].
+// For JSON structural positions, the only bytes ≤ 0x20 that can
+// appear are WS (0x09/0x0a/0x0d/0x20); any other low byte is malformed
+// and will be rejected by the next value parse. Treating "byte ≤ 0x20"
+// as WS lets the kernel run a single CMHI compare per 16 bytes instead
+// of four VCMEQ + OR tree.
+//
+// Go's arm64 assembler doesn't spell CMHI directly, so the single-op
+// compare is emitted via WORD. Encoding: 0Q 1 01110 size 1 Rm 001101
+// Rn Rd — for 16B (Q=1, size=00) base 0x6E203400, then + (Rm<<16) +
+// (Rn<<5) + Rd.
 //
 // Register usage:
 //   R0  p
@@ -13,17 +21,16 @@
 
 #include "textflag.h"
 
+// CMHI V9.16B, V0.16B, V1.16B  (V9[i] = (V0[i] > V1[i]))
+#define CMHI_V0_V1_V9 WORD $0x6E213409
+
 // func skipWSSIMD(p *byte, n int) int
 TEXT ·skipWSSIMD(SB), NOSPLIT, $0-24
 	MOVD p+0(FP), R0
 	MOVD n+8(FP), R1
-
 	MOVD ZR, R2
 
 	VMOVI $0x20, V1.B16                 // ' '
-	VMOVI $0x09, V3.B16                 // '\t'
-	VMOVI $0x0a, V5.B16                 // '\n'
-	VMOVI $0x0d, V7.B16                 // '\r'
 
 loop16:
 	SUB  R2, R1, R3
@@ -33,21 +40,14 @@ loop16:
 	ADD  R0, R2, R4
 	VLD1 (R4), [V0.B16]
 
-	VCMEQ V0.B16, V1.B16, V2.B16
-	VCMEQ V0.B16, V3.B16, V8.B16
-	VORR  V8.B16, V2.B16, V9.B16
-	VCMEQ V0.B16, V5.B16, V10.B16
-	VORR  V10.B16, V9.B16, V9.B16
-	VCMEQ V0.B16, V7.B16, V11.B16
-	VORR  V11.B16, V9.B16, V9.B16
+	// V9[i] = 0xFF if V0[i] > V1[i] (byte > 0x20 — non-WS candidate).
+	CMHI_V0_V1_V9
 
-	// V9 byte lanes: 0xFF if WS, 0x00 otherwise. We want the first
-	// NON-WS byte, so check "all WS" by ANDing both 64-bit halves.
+	// "any non-WS in 16" — OR the two 8-byte halves; nonzero ⇒ break.
 	VMOV V9.D[0], R5
 	VMOV V9.D[1], R6
-	AND  R6, R5, R5
-	CMP  $-1, R5
-	BNE  tail                           // not all 16 are WS → drop to scalar
+	ORR  R6, R5, R5
+	CBNZ R5, tail
 
 	ADD  $16, R2, R2
 	B    loop16
@@ -57,16 +57,7 @@ tail:
 	BGE  done
 	MOVBU (R0)(R2), R4
 	CMP  $0x20, R4
-	BEQ  next
-	CMP  $0x09, R4
-	BEQ  next
-	CMP  $0x0a, R4
-	BEQ  next
-	CMP  $0x0d, R4
-	BEQ  next
-	B    done
-
-next:
+	BHI  done                           // > 0x20 ⇒ stop (any non-WS byte)
 	ADD  $1, R2, R2
 	B    tail
 

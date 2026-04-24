@@ -17,6 +17,8 @@ type decoder struct {
 	// mallocgc calls into a single chunked allocation.
 	fslab floatSlab
 	sslab stringSlab
+	// byte-level slab for typed string fields (struct/slice/map values).
+	bslab byteSlab
 	// rootPeeked is set after the first object's size-hint scan. Inner
 	// objects skip the peek: we'd otherwise pay the 256-B cost on every
 	// nested object (32 % CPU on deeply-formatted JSON).
@@ -33,6 +35,7 @@ func (d *decoder) reset(data []byte) {
 	// reset slabs: drop references so GC can reclaim if no longer held.
 	d.fslab.buf = nil
 	d.sslab.buf = nil
+	d.bslab.buf = nil
 }
 
 // decodeInto dispatches on the dynamic type of v.
@@ -80,14 +83,19 @@ func (d *decoder) skipWS() {
 	d.p = skipWSFast(d.data, d.p)
 }
 
-// skipWSFast is the inline-friendly fast path. All JSON whitespace bytes
-// (space, tab, LF, CR) are ≤ 0x20; any byte > 0x20 is definitely non-WS.
-// That single compare is enough for the fast case (compact JSON, struct-
-// field boundaries) and keeps the function small enough to inline.
-// If the current byte could be WS we hand off to skipWSDeep.
+// skipWSFast is the fast-path for the common "next byte is non-WS" plus
+// "single-space separator" cases (e.g. `": "<value>`, `, <value>`). Only
+// when the whitespace run is >1 byte do we hand off to skipWSDeep.
 func skipWSFast(b []byte, p int) int {
-	if p < len(b) && b[p] > ' ' {
+	if p >= len(b) {
 		return p
+	}
+	c := b[p]
+	if c > ' ' {
+		return p
+	}
+	if c == ' ' && p+1 < len(b) && b[p+1] > ' ' {
+		return p + 1
 	}
 	return skipWSDeep(b, p)
 }
@@ -285,12 +293,31 @@ func (d *decoder) decodeString() (string, error) {
 	}
 	p++
 	start := p
-	remain := len(b) - p
-	// Threshold chosen so the AVX-512 kernel pays off (VPBROADCASTB setup
-	// + function call overhead). Below 64, use inline 8-byte SWAR.
-	if hasFastScan && remain >= 64 {
-		off := scanStringSIMD(&b[p], remain)
-		p += off
+	// SWAR prefix handles short strings without the scanStringSIMD call.
+	// Below the 16-byte window, fall to 8-byte SWAR. Above it, dispatch
+	// SIMD for the bulk.
+	if p+16 <= len(b) {
+		w1 := *(*uint64)(unsafe.Pointer(&b[p]))
+		if !hasQuoteOrBackslashOrCtl(w1) {
+			w2 := *(*uint64)(unsafe.Pointer(&b[p+8]))
+			if !hasQuoteOrBackslashOrCtl(w2) {
+				p += 16
+				remain := len(b) - p
+				if hasFastScan && remain >= 64 {
+					p += scanStringSIMD(&b[p], remain)
+				} else {
+					for p+8 <= len(b) {
+						w := *(*uint64)(unsafe.Pointer(&b[p]))
+						if hasQuoteOrBackslashOrCtl(w) {
+							break
+						}
+						p += 8
+					}
+				}
+			} else {
+				p += 8
+			}
+		}
 	} else {
 		for p+8 <= len(b) {
 			w := *(*uint64)(unsafe.Pointer(&b[p]))
