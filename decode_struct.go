@@ -198,9 +198,10 @@ func (d *decoder) decodeStringRaw() ([]byte, error) {
 			break
 		}
 		p += 8
-		// Long-string path: after a 16-byte warmup, dispatch the SIMD
-		// kernel for the bulk of the body.
-		if hasFastScan && p-start >= 16 && len(b)-p >= 64 {
+		// Long-string path: after a 32-byte warmup, dispatch the SIMD
+		// kernel for the bulk of the body. Most struct keys finish via
+		// SWAR well inside this window.
+		if hasFastScan && p-start >= 32 && len(b)-p >= 64 {
 			p += scanStringSIMD(&b[p], len(b)-p)
 			break
 		}
