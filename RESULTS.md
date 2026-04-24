@@ -45,8 +45,8 @@ Starting from the "no asm / no CGO" constraint, then relaxing it after the user 
 
 | target | status |
 |---|---|
-| linux/amd64 | primary target — 1 AVX-512 asm kernel (string scan), all other code pure Go |
-| linux/arm64 | pure-Go fallback (`scan_other.go`) — every Phase 1 win applies |
+| linux/amd64 | primary target — AVX-512 asm kernels (string scan, whitespace skip, digit emission) |
+| linux/arm64 | primary target — NEON asm kernels + Phase-4 ARM64 tuning; ≥10 % over sonic on the 1/5/10 MB deep-struct corpus |
 | darwin/amd64 | same as linux/amd64 |
 | darwin/arm64 | same as linux/arm64 |
 
@@ -192,3 +192,60 @@ On the canada encode target specifically: **+12.6 % slower → −14.9 % faster*
 > on the hot path after plan-cache warmup. Clean `go test ./...` across
 > all corpora including deep-equality round-trip vs stdlib on four canon-
 > ical files (small.json, twitter.json, citm_catalog.json, canada.json).
+
+## Phase 4 — ARM64 struct decode
+
+After Phases 1–3 closed the amd64 gates, the arm64 NEON port was sitting
+at **~420 MB/s** on the 10-level formatted corpus versus sonic's **~595
+MB/s** — a 29 % deficit. The arm64 SIMD kernels were straight ports of
+the AVX-512 ones, and the ports' per-call overhead dominated the short
+whitespace and string runs typical of deeply-formatted JSON.
+
+### Host
+
+- Oracle Ampere Altra (Neoverse-N1), 2 vCPU, Linux 6.8, Go 1.25.0.
+- Bench: `-benchtime=5s -count=2`, median reported; run-to-run variance
+  under 1 % on this host.
+
+### Experiments
+
+| # | Hypothesis | Result | Kept |
+|---|------------|--------|------|
+| A0 | Profile baseline | `skipWSSIMD` 25 %, `scanStringSIMD` 19 %, `reflect.MakeSlice`-based `growSlice` 17 % of decode CPU | — |
+| A1 | `growSlice` reaches `reflect.unsafe_NewArray` via `go:linkname`; cache element `*rtype` per plan, skip the `reflect.SliceOf` sync.Map lookup and `reflect.Value` wrapping | **420 → 505 MB/s** on 10 MB (+20 %); alloc count halved | ✓ |
+| A2 | 1-byte-space fast path in `skipWSFast` — the `": "<value>` and `", "<value>` separators were dispatching through `skipWSFast → skipWSDeep → skipWSSIMD` just to consume a single byte | **505 → 553 MB/s** on 10 MB (+10 %) | ✓ |
+| A3 | 16-byte SWAR prefix in `decodeString`/`decodeStringRaw` before dispatching `scanStringSIMD`; most struct keys fit in the window and skip the SIMD call entirely | **553 → 610 MB/s** on 10 MB (+10 %); `scanStringSIMD` self-time 3.32 s → 0.14 s | ✓ |
+| A4 | Merge post-`{`/post-`[` skipWS into the loop head in `decodeStruct`/`buildSliceDecoder`; fast-path `:` / `,` / `}` when adjacent to the value | **610 → 620 MB/s** on 10 MB | ✓ |
+| A5a | UMINV reduction + 32-byte stride in the NEON skipWS kernel | 420 → 365 MB/s (UMINV latency 4 cycles vs VMOV-pair+AND 4 cycles — doesn't help on N1) | ✗ |
+| A5b | 32-byte stride with two independent 16-byte reductions | 505 → 478 MB/s (mixed-match iter doubles work — regressed) | ✗ |
+| A5c | 8-byte SWAR full replacement (skip SIMD entirely) | 505 → 495 MB/s (allWSSWAR costs 20 ops per 8 bytes vs 11 NEON ops per 16 — SWAR loses on bandwidth) | ✗ |
+| A6 | Tree-reduce the 4-way VCMEQ ⋅ OR chain into two pairs + final merge | Marginal +0.5 % on 10 MB | ✓ |
+| **A7 (biggest arm64 win)** | **Single `CMHI` compare against 0x20** in the skipWS kernel. In JSON structural positions every byte ≤ 0x20 is either a WS char or malformed, and the next token parse rejects the latter — so "byte > 0x20" is equivalent to "non-WS". Replaces 4×VCMEQ + OR-tree with one comparator. Emitted via `WORD $0x6E213409` because Go's arm64 assembler doesn't spell CMHI directly. | **620 → 677 MB/s** on 10 MB (+9 %); skipWSSIMD self-time 27 % → ~12 % | ✓ |
+
+### Phase 4 scorecard (arm64)
+
+Typed struct decode on the 10-level formatted corpus, `-benchtime=5s
+-count=2`:
+
+| corpus | sonic MB/s | jsonx MB/s | Δ vs sonic |
+|--------|-----------:|-----------:|-----------:|
+| 1 MB formatted | 626 | **698** | **+11.5 %** ✓ |
+| 5 MB formatted | 601 | **688** | **+14.5 %** ✓ |
+| 10 MB formatted | 594 | **675** | **+13.6 %** ✓ |
+
+Memory and alloc pressure also drop sharply on this target — jsonx uses
+about 11 % of sonic's resident bytes (9 MB vs 83 MB on the 10 MB input)
+and about half the allocations (22 K vs 45 K). All existing correctness
+tests continue to pass, and the 10-level-formatted deep-equality parity
+test against `encoding/json` is part of the bench harness.
+
+### Takeaway for arm64
+
+The single biggest lesson was A7: under JSON's grammar, a structural-
+position whitespace skipper doesn't need to enumerate the four WS
+characters — it only needs to stop at "something that isn't ≤ 0x20",
+because any stray low byte becomes a syntax error at the next parse
+step. That observation collapses a 7-instruction comparator into a
+1-instruction comparator, and since the skipWS kernel runs on ~50 % of
+the bytes of deeply-formatted JSON, the win propagates through the
+whole throughput number.

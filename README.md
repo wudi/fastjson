@@ -32,6 +32,20 @@ and 1 / 5 / 10 MB synthetic 10-level formatted payloads):
 10-level formatted decode, where sonic's native structural scanner still holds
 a small edge (+7–9 %) for very large payloads.
 
+### ARM64 (Ampere Altra / Neoverse-N1)
+
+Typed struct decoding on the same 1/5/10 MB 10-level formatted corpus,
+`-benchtime=5s -count=2`:
+
+| Workload | sonic | jsonx | Δ vs sonic |
+|---|--:|--:|--:|
+| Decode struct · 1 MB formatted | 626 MB/s | **698 MB/s** | **+11.5 %** |
+| Decode struct · 5 MB formatted | 601 MB/s | **688 MB/s** | **+14.5 %** |
+| Decode struct · 10 MB formatted | 594 MB/s | **675 MB/s** | **+13.6 %** |
+
+jsonx on this target uses about 11 % of sonic's resident memory (9 MB
+vs 83 MB for the 10 MB input) and half the allocations (22 K vs 45 K).
+
 Full head-to-head vs stdlib, `goccy/go-json`, and sonic — including every
 corpus, experiment, and methodological caveat — lives in [RESULTS.md](RESULTS.md).
 
@@ -82,8 +96,8 @@ the same byte output up to shortest-representation equivalence.
 |---|---|---|
 | linux/amd64 | Primary | 3 SIMD kernels (AVX-512BW string scan, AVX-512BW whitespace skipper, amd64 digit-emission). Runtime-gated on `cpuid`. |
 | darwin/amd64 | Primary | Same kernels. |
-| linux/arm64 | Secondary | NEON + scalar arm64 kernels for string scan, whitespace skip, digit emission. |
-| darwin/arm64 | Secondary | Same as linux/arm64. |
+| linux/arm64 | Primary | NEON + scalar arm64 kernels for string scan, whitespace skip, digit emission. Whitespace skipper compiles to a single `CMHI` compare per 16-byte chunk — lets struct decode beat sonic by 11–14 % on the deeply-formatted corpora. |
+| darwin/arm64 | Primary | Same as linux/arm64. |
 | Other (`GOOS`/`GOARCH`) | Fallback | Pure-Go SWAR path. Every Phase-1 algorithmic win still applies. |
 
 All assembly kernels are gated behind a runtime CPU-feature check (AVX-512BW
@@ -114,6 +128,26 @@ The wins come from a combination of algorithmic and micro-architectural work:
 - **AVX-512BW whitespace skipper** — same 64-byte cadence,
   `VPBROADCASTB × 4 + VPCMPEQB × 4 + KORQ + KNOTQ + KTESTQ + TZCNTQ`.
   Closed most of the prior regression on 10-level formatted corpora.
+- **ARM64 NEON whitespace skipper** — a single `CMHI` compare against `0x20`
+  per 16-byte load. In JSON structural positions every byte ≤ 0x20 is either
+  whitespace (space / tab / LF / CR) or malformed input that the next token
+  parse rejects, so the four-way VCMEQ + OR-tree of the textbook kernel
+  collapses to one comparator. Took the skipWS self-time from 27 % of
+  arm64 decode CPU down into the single digits.
+- **SWAR prefix on string body scan** — two 8-byte probes of the
+  `hasQuoteOrBackslashOrCtl` trick before dispatching `scanStringSIMD`. Most
+  struct keys and many string values fit in 16 bytes and skip the SIMD-kernel
+  call entirely — `scanStringSIMD` self-time drops from ~20 % to ~1 % of
+  arm64 decode CPU.
+- **Direct `mallocgc` for slice growth** — `growSlice` reaches
+  `reflect.unsafe_NewArray` via `go:linkname` and caches the element `*rtype`
+  at plan-build time, skipping the `reflect.SliceOf` sync.Map lookup and the
+  `reflect.Value` wrapping that `reflect.MakeSlice` performs per grow.
+- **Tight struct decode loop** — fold the post-`{` skipWS into the loop
+  head, fast-path `:` / `,` / `}` when no whitespace sits between the value
+  and the next structural char, and a 1-byte-space inline in `skipWSFast`
+  for the common `": "<value>` separator. Cuts the skipWS call count per
+  struct field from four to roughly one and a half.
 - **Peek-ahead map-size hint** — bounded 256-byte comma count gives
   `make(map, hint)` a starting size that's never too small. Over-allocation
   is cheap compared to rehash cascades; post-change
