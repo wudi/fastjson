@@ -116,14 +116,19 @@ func decodeStruct(d *decoder, p unsafe.Pointer, plan *structPlan) error {
 		// When name length > 8, also compare the tail. This kills the
 		// fnv1aBytes hot spot (was ~4 % CPU on struct decode) and
 		// collapses the check to a pointer-sized compare.
+		//
+		// Short-key direct-load: key is a subslice of d.data (or of
+		// d.scratch when escapes are present) — both have bytes past
+		// &key[klen-1], so reading a full uint64 at &key[0] and masking
+		// to klen bytes is safe and avoids the stack-array+copy that a
+		// length-<8 branch would cost.
 		klen := len(key)
-		var kb [8]byte
+		var kprefix uint64
 		if klen >= 8 {
-			*(*uint64)(unsafe.Pointer(&kb[0])) = *(*uint64)(unsafe.Pointer(&key[0]))
-		} else {
-			copy(kb[:], key)
+			kprefix = *(*uint64)(unsafe.Pointer(&key[0]))
+		} else if klen > 0 {
+			kprefix = *(*uint64)(unsafe.Pointer(&key[0])) & ((uint64(1) << (klen << 3)) - 1)
 		}
-		kprefix := *(*uint64)(unsafe.Pointer(&kb[0]))
 		found := false
 		for i := range plan.fields {
 			f := &plan.fields[i]
