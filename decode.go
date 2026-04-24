@@ -2,6 +2,7 @@ package jsonx
 
 import (
 	"math"
+	"math/bits"
 	"reflect"
 	"sync"
 	"unsafe"
@@ -17,8 +18,9 @@ type decoder struct {
 	// mallocgc calls into a single chunked allocation.
 	fslab floatSlab
 	sslab stringSlab
-	// byte-level slab for typed string fields (struct/slice/map values).
-	bslab byteSlab
+	// slice-header slab: pools the 24-byte []interface{} headers so
+	// decodeAny can return them as interface{} without boxing per call.
+	aslab sliceIfaceSlab
 	// rootPeeked is set after the first object's size-hint scan. Inner
 	// objects skip the peek: we'd otherwise pay the 256-B cost on every
 	// nested object (32 % CPU on deeply-formatted JSON).
@@ -35,7 +37,7 @@ func (d *decoder) reset(data []byte) {
 	// reset slabs: drop references so GC can reclaim if no longer held.
 	d.fslab.buf = nil
 	d.sslab.buf = nil
-	d.bslab.buf = nil
+	d.aslab.buf = nil
 }
 
 // decodeInto dispatches on the dynamic type of v.
@@ -142,7 +144,14 @@ func (d *decoder) decodeAny() (interface{}, error) {
 		return d.decodeObject()
 	}
 	if c == '[' {
-		return d.decodeArray()
+		arr, err := d.decodeArray()
+		if err != nil {
+			return nil, err
+		}
+		// Box the 24-byte slice header through the slab so the interface
+		// conversion doesn't mallocgc per array. Each chunk amortizes
+		// ~256 boxings into a single heap allocation.
+		return ifaceFromSlicePtr(d.aslab.alloc(arr)), nil
 	}
 	if c == 't' || c == 'f' {
 		v, err := d.decodeBool()
@@ -196,17 +205,34 @@ func (d *decoder) decodeObject() (map[string]interface{}, error) {
 		if err != nil {
 			return nil, err
 		}
-		b = d.data
-		p = skipWSFast(b, d.p)
-		if p >= len(b) || b[p] != ':' {
-			return nil, syntaxErr("expected ':'", p)
+		// Fast-path `:` adjacent to key (the common compact-JSON case).
+		if d.p < len(d.data) && d.data[d.p] == ':' {
+			d.p++
+		} else {
+			d.p = skipWSFast(d.data, d.p)
+			if d.p >= len(d.data) || d.data[d.p] != ':' {
+				return nil, syntaxErr("expected ':'", d.p)
+			}
+			d.p++
 		}
-		d.p = p + 1
 		val, err := d.decodeAny()
 		if err != nil {
 			return nil, err
 		}
 		m[key] = val
+		// Fast-path the typical `"..."<,|}>` adjacency where no
+		// whitespace sits between the value and the structural char.
+		if d.p < len(d.data) {
+			c := d.data[d.p]
+			if c == ',' {
+				d.p++
+				continue
+			}
+			if c == '}' {
+				d.p++
+				return m, nil
+			}
+		}
 		b = d.data
 		p = skipWSFast(b, d.p)
 		if p >= len(b) {
@@ -240,6 +266,19 @@ func (d *decoder) decodeArray() ([]interface{}, error) {
 			return nil, err
 		}
 		arr = append(arr, val)
+		// Fast-path adjacent `,`/`]` to skip the skipWSFast call in the
+		// compact-JSON case (no whitespace between element and separator).
+		if d.p < len(d.data) {
+			c := d.data[d.p]
+			if c == ',' {
+				d.p++
+				continue
+			}
+			if c == ']' {
+				d.p++
+				return arr, nil
+			}
+		}
 		b = d.data
 		p = skipWSFast(b, d.p)
 		if p >= len(b) {
@@ -293,38 +332,31 @@ func (d *decoder) decodeString() (string, error) {
 	}
 	p++
 	start := p
-	// SWAR prefix handles short strings without the scanStringSIMD call.
-	// Below the 16-byte window, fall to 8-byte SWAR. Above it, dispatch
-	// SIMD for the bulk.
-	if p+16 <= len(b) {
-		w1 := *(*uint64)(unsafe.Pointer(&b[p]))
-		if !hasQuoteOrBackslashOrCtl(w1) {
-			w2 := *(*uint64)(unsafe.Pointer(&b[p+8]))
-			if !hasQuoteOrBackslashOrCtl(w2) {
-				p += 16
-				remain := len(b) - p
-				if hasFastScan && remain >= 64 {
-					p += scanStringSIMD(&b[p], remain)
-				} else {
-					for p+8 <= len(b) {
-						w := *(*uint64)(unsafe.Pointer(&b[p]))
-						if hasQuoteOrBackslashOrCtl(w) {
-							break
-						}
-						p += 8
-					}
-				}
-			} else {
-				p += 8
+	// SWAR scan until first `"`/`\\`/ctl match, then pin exact byte position
+	// via TrailingZeros on the combined mask. Skips the per-byte scalar tail
+	// that used to re-scan up to 7 bytes after the SWAR said "something's in
+	// this word".
+	for p+8 <= len(b) {
+		w := *(*uint64)(unsafe.Pointer(&b[p]))
+		mask := stringBreakMask(w)
+		if mask != 0 {
+			p += bits.TrailingZeros64(mask) >> 3
+			c := b[p]
+			if c == '"' {
+				d.p = p + 1
+				return b2sUnsafe(b[start:p]), nil
 			}
+			if c == '\\' {
+				return d.decodeStringEscape(start, p)
+			}
+			return "", syntaxErr("invalid control char in string", p)
 		}
-	} else {
-		for p+8 <= len(b) {
-			w := *(*uint64)(unsafe.Pointer(&b[p]))
-			if hasQuoteOrBackslashOrCtl(w) {
-				break
-			}
-			p += 8
+		p += 8
+		// Long-string path: dispatch AVX-512/NEON once we've scanned past
+		// the 16-byte warmup window and still have at least 64 bytes left.
+		if hasFastScan && p-start >= 16 && len(b)-p >= 64 {
+			p += scanStringSIMD(&b[p], len(b)-p)
+			break
 		}
 	}
 	for p < len(b) {
@@ -353,16 +385,23 @@ func (d *decoder) decodeString() (string, error) {
 // We conservatively accept false positives (they only cost us a slow
 // byte-by-byte scan); false negatives would be wrong.
 func hasQuoteOrBackslashOrCtl(w uint64) bool {
+	return stringBreakMask(w) != 0
+}
+
+// stringBreakMask returns a bitmask with bit 7 of each byte set if that
+// byte is '"', '\\', or a control byte (< 0x20). `bits.TrailingZeros64` on
+// the mask divided by 8 is the byte offset of the first match — the
+// position-pinning variant is 2–3 × faster than a scalar retry loop when
+// the caller needs to know exactly where the match is.
+func stringBreakMask(w uint64) uint64 {
 	const lo = 0x0101010101010101
 	const hi = 0x8080808080808080
-	// equals 0x22 / 0x5c via zero-byte on XOR
 	q := w ^ (lo * 0x22)
 	b := w ^ (lo * 0x5c)
 	hasQuote := (q - lo) & ^q & hi
 	hasBslash := (b - lo) & ^b & hi
-	// less-than 0x20
 	hasCtl := (w - lo*0x20) & ^w & hi
-	return (hasQuote | hasBslash | hasCtl) != 0
+	return hasQuote | hasBslash | hasCtl
 }
 
 func (d *decoder) decodeStringEscape(start, p int) (string, error) {

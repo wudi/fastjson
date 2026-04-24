@@ -1,6 +1,7 @@
 package jsonx
 
 import (
+	"math/bits"
 	"reflect"
 	"strings"
 	"unsafe"
@@ -185,38 +186,23 @@ func (d *decoder) decodeStringRaw() ([]byte, error) {
 	}
 	p++
 	start := p
-	// SWAR prefix handles keys/short strings (≤16 bytes) without the
-	// scanStringSIMD call-overhead. Most struct keys and many string
-	// values fit in this window.
-	if p+16 <= len(b) {
-		w1 := *(*uint64)(unsafe.Pointer(&b[p]))
-		if !hasQuoteOrBackslashOrCtl(w1) {
-			w2 := *(*uint64)(unsafe.Pointer(&b[p+8]))
-			if !hasQuoteOrBackslashOrCtl(w2) {
-				p += 16
-				remain := len(b) - p
-				if hasFastScan && remain >= 64 {
-					p += scanStringSIMD(&b[p], remain)
-				} else {
-					for p+8 <= len(b) {
-						w := *(*uint64)(unsafe.Pointer(&b[p]))
-						if hasQuoteOrBackslashOrCtl(w) {
-							break
-						}
-						p += 8
-					}
-				}
-			} else {
-				p += 8
-			}
+	// SWAR 8-byte stride with TrailingZeros-based position pinning.
+	// Most struct keys are short; resolving the exact `"`/`\\`/ctl byte
+	// in one SWAR word beats the per-byte scalar retry loop we used to
+	// fall into after the "match somewhere in this word" signal.
+	for p+8 <= len(b) {
+		w := *(*uint64)(unsafe.Pointer(&b[p]))
+		mask := stringBreakMask(w)
+		if mask != 0 {
+			p += bits.TrailingZeros64(mask) >> 3
+			break
 		}
-	} else {
-		for p+8 <= len(b) {
-			w := *(*uint64)(unsafe.Pointer(&b[p]))
-			if hasQuoteOrBackslashOrCtl(w) {
-				break
-			}
-			p += 8
+		p += 8
+		// Long-string path: after a 16-byte warmup, dispatch the SIMD
+		// kernel for the bulk of the body.
+		if hasFastScan && p-start >= 16 && len(b)-p >= 64 {
+			p += scanStringSIMD(&b[p], len(b)-p)
+			break
 		}
 	}
 	for p < len(b) {

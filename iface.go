@@ -123,39 +123,49 @@ func (s *stringSlab) alloc(v string) *string {
 	return &s.buf[len(s.buf)-1]
 }
 
-// byteSlab pools the backing bytes for strings copied into user structs.
-// Each struct-field string is physically owned (Unmarshal guarantees the
-// decoded value outlives the input), so we must copy — but copying each
-// string via `string(bs)` triggers an individual mallocgc. The slab
-// collapses those into chunked allocations that amortize the runtime
-// overhead. The slab keeps its chunks reachable via d.scratch-style
-// append semantics: once a chunk is full, a new chunk is allocated and
-// the old one remains live through the returned string headers.
-type byteSlab struct {
-	buf []byte
+// sliceHdr mirrors Go's internal slice header so we can slab-pool
+// []interface{} headers and hand out stable pointers into the pool.
+// Go's interface{} data word is 8 bytes, but a slice is 24 bytes, so
+// the naive `return someSlice` path inside `decodeAny` triggers a
+// mallocgc per returned array to box the header. Routing the headers
+// through a slab (identical in shape to `stringSlab`) amortizes that
+// into one allocation per chunk.
+type sliceHdr struct {
+	Data unsafe.Pointer
+	Len  int
+	Cap  int
 }
 
-// allocString copies src into the slab and returns a Go string whose
-// backing data lives inside the slab chunk.
-func (s *byteSlab) allocString(src []byte) string {
-	n := len(src)
-	if n == 0 {
-		return ""
-	}
-	if cap(s.buf)-len(s.buf) < n {
-		// Grow: next chunk at least 2× previous, enough for src.
-		newCap := cap(s.buf) * 2
-		if newCap < 256 {
-			newCap = 256
-		}
-		if newCap < n {
-			newCap = n
-		}
-		s.buf = make([]byte, 0, newCap)
-	}
-	start := len(s.buf)
-	s.buf = append(s.buf, src...)
-	// String header aliases into the slab. Safe: chunk is kept alive
-	// by the returned string (GC follows the data pointer).
-	return unsafe.String(&s.buf[start], n)
+type sliceIfaceSlab struct {
+	buf []sliceHdr
 }
+
+const sliceIfaceSlabMax = 256
+
+func (s *sliceIfaceSlab) alloc(v []interface{}) *sliceHdr {
+	if len(s.buf) == cap(s.buf) {
+		newCap := cap(s.buf) * 2
+		if newCap == 0 {
+			newCap = 4
+		} else if newCap > sliceIfaceSlabMax {
+			newCap = sliceIfaceSlabMax
+		}
+		s.buf = make([]sliceHdr, 0, newCap)
+	}
+	// Copy the live slice header byte-for-byte (data/len/cap).
+	hdr := *(*sliceHdr)(unsafe.Pointer(&v))
+	s.buf = append(s.buf, hdr)
+	return &s.buf[len(s.buf)-1]
+}
+
+// ifaceFromSlicePtr boxes a pointer-to-sliceHdr as an interface{} whose
+// dynamic type is []interface{}. The slab guarantees the pointer stays
+// valid as long as anything in the decoded tree references it.
+func ifaceFromSlicePtr(p *sliceHdr) interface{} {
+	var i interface{}
+	ef := (*eface)(unsafe.Pointer(&i))
+	ef.typ = typeSliceInterface
+	ef.data = unsafe.Pointer(p)
+	return i
+}
+
