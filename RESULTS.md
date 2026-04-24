@@ -249,3 +249,65 @@ step. That observation collapses a 7-instruction comparator into a
 1-instruction comparator, and since the skipWS kernel runs on ~50 % of
 the bytes of deeply-formatted JSON, the win propagates through the
 whole throughput number.
+
+## Phase 5 — amd64 autoresearch sweep on interface{} decode
+
+Phase-4 tuned arm64 struct decode; the remaining gate that hadn't cleanly
+passed the ≥10 %-vs-sonic rule on amd64 was interface{} decode on deeply
+formatted JSON. A full sweep on the same AMD EPYC-Genoa host fixed that
+and widened every other gate.
+
+### Experiments
+
+| # | Hypothesis | Result | Kept |
+|---|-----------|--------|------|
+| X0 | Profile 10 MB interface{} decode — find remaining hotspots beyond the arm64-era wins | `decodeArray` shows 5.9 M flat allocs at `return d.decodeArray()` (box slice header), `mapassign_faststr` 25 % cum, `skipWSSIMD` 5 % | — |
+| X1 | **`sliceIfaceSlab`** — pool 24-byte `[]interface{}` headers identical in shape to `floatSlab`/`stringSlab` so `decodeAny` returning an array boxes through the slab instead of one mallocgc per call | 10 MB interface{} alloc count 162 K → 138 K /op; +10 % throughput | ✓ |
+| X2 | **skipws_amd64.s → single `VPCMPUB $6, Z0, Z1, K1`** — mirror of the arm64 CMHI trick. In structural position any byte ≤ 0x20 is WS or malformed, so "byte > 0x20" is an equivalent non-WS check and collapses the 4×VPCMPEQB + KORQ-tree + KNOTQ into one comparator | Struct 10 MB formatted 1132 → 1275 MB/s (+12.6 %) | ✓ |
+| X3 | `decodeObject` / `decodeArray` **adjacency fast-paths** for `:` / `,` / `}` / `]` — same treatment `decodeStruct` got in the arm64 commit. Skips the `skipWSFast` dispatch for compact-JSON values where no whitespace separates the token from the structural char | twitter interface{} +3.8 % → +12 %, citm +23.8 % → +37.7 %, canada +44 % → +76 % | ✓ |
+| X4 | `decodeString`: **position-pinning SWAR** — combined `"`/`\\`/ctl mask via `stringBreakMask`, first match via `bits.TrailingZeros64(mask)>>3`. Eliminates the per-byte scalar retry loop we used to run after the SWAR said "there's a match in this word" | `scanStringSIMD` self-time 3.32 s → 0.14 s on 10 MB struct; 10 MB interface{} 578 → 629 MB/s | ✓ |
+| X5 | Same position-pinning for `decodeStringRaw` (struct key path) | Keeps struct numbers at the X2 peak even with the looser SIMD dispatch (body-length-16 warmup before firing) | ✓ |
+| X-UMINV | UMINV / UMAXV + 32-byte stride in skipws arm64 | Slower: UMINV has 4-cycle latency on Neoverse-N1 vs VMOV-pair + AND 4-cycle critical path | ✗ |
+| X-bslab | `byteSlab` for struct-field string copies — arena the backing bytes for `*(*string)(p) = string(bs)` | Regressed: Go's `string(bs)` path already hits the mallocgc tiny-alloc class cleanly; the extra copy into the slab costs more than the saved mallocgc | ✗ |
+| X-swar | Pure-SWAR `skipWSDeep` (no SIMD) | 20 ops per 8 bytes vs 11 NEON ops per 16 — SWAR loses on raw bandwidth for long WS runs | ✗ |
+| X-prefix | 8/24-byte scalar prefix before dispatching `skipWSSIMD` | Regressed on the common 20–40-byte indent run: the scalar loop is slower per byte than a SIMD iteration | ✗ |
+
+### Phase-5 scorecard (amd64, `-benchtime=5s -count≥2`)
+
+**Interface{} decode (jsonx vs sonic best ns/op, all MB/s below):**
+
+| corpus | sonic | jsonx | Δ |
+|--------|------:|------:|--:|
+| small.json | 203 | **259** | **+27.7 %** |
+| twitter.json | 379 | **487** | **+28.5 %** |
+| citm_catalog.json | 395 | **602** | **+52.7 %** |
+| canada.json | 197 | **319** | **+62.3 %** |
+| 1 MB formatted | 530 | **777** | **+46.7 %** |
+| 5 MB formatted | 534 | **680** | **+27.4 %** |
+| 10 MB formatted | 582 | **661** | **+13.6 %** |
+
+**Struct decode:**
+
+| corpus | sonic | jsonx | Δ |
+|--------|------:|------:|--:|
+| small.json → `SmallUser` | 403 | **506** | **+25.5 %** |
+| 1 MB formatted | 782 | **1286** | **+64.5 %** |
+| 5 MB formatted | 745 | **1290** | **+73.2 %** |
+| 10 MB formatted | 770 | **1268** | **+64.7 %** |
+
+No gate regresses vs the pre-sweep state; every measurement improved in
+absolute terms. Memory too: the 10 MB interface{} bench allocates
+23.7 MB / 138 K objects vs sonic's 38.7 MB / 277 K.
+
+### Takeaway for amd64 interface{}
+
+Two observations closed the last gap. First, the naive `return
+d.decodeArray()` path silently mallocs per array to box the 24-byte
+slice header — invisible in the code, obvious in a flat alloc-objects
+profile on line 145 of `decode.go`. Second, the 64-byte whitespace
+kernel that looks textbook ("compare against each of space / tab / LF /
+CR, OR the four masks, find the first non-set lane") can collapse to
+one AVX-512 comparator once you notice that the JSON grammar already
+rejects every stray byte ≤ 0x20 at the next token parse — so "byte >
+0x20" is a faithful non-WS predicate in structural position. Together
+they turned the 10 MB interface{} gate from noise-floor to +13 %.

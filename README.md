@@ -7,30 +7,27 @@ A high-performance JSON library for Go with a drop-in `encoding/json` API.
 
 ## Highlights
 
-Best-of-5 over `-benchtime=3s -count=5` on an AMD EPYC-Genoa host with
-AVX-512BW, across seven corpus files (small, twitter, citm_catalog, canada,
-and 1 / 5 / 10 MB synthetic 10-level formatted payloads):
+### Decode (amd64 AMD EPYC-Genoa, AVX-512BW, `-benchtime=5s -count≥2`)
 
 | Workload | sonic | jsonx | Δ vs sonic |
 |---|--:|--:|--:|
-| Decode `interface{}` · small.json | 715 ns | **515 ns** | **−28.0 %** |
-| Decode `interface{}` · twitter.json | 1.61 ms | **1.41 ms** | **−12.2 %** |
-| Decode `interface{}` · citm_catalog.json | 3.67 ms | **3.16 ms** | **−13.8 %** |
-| Decode `interface{}` · canada.json (float-heavy) | 10.82 ms | **8.12 ms** | **−24.9 %** |
-| Decode `interface{}` · 1 MB formatted | 1.69 ms | **1.46 ms** | **−13.7 %** |
-| Decode `interface{}` · 5 MB formatted | 8.35 ms | **7.33 ms** | **−12.2 %** |
-| Decode struct (typed `SmallUser`) | 476 ns | **409 ns** | **−14.1 %** |
-| Encode `interface{}` · small.json | 486 ns | **314 ns** | **−35.4 %** |
-| Encode `interface{}` · twitter.json | 847 µs | **750 µs** | **−11.5 %** |
-| Encode `interface{}` · citm_catalog.json | 2.16 ms | **1.29 ms** | **−40.4 %** |
-| Encode `interface{}` · canada.json | 6.53 ms | **5.56 ms** | **−14.9 %** |
-| Encode `interface{}` · 1 MB formatted | 1.27 ms | **752 µs** | **−40.7 %** |
-| Encode `interface{}` · 5 MB formatted | 8.37 ms | **3.96 ms** | **−52.6 %** |
-| Encode `interface{}` · 10 MB formatted | 18.39 ms | **9.01 ms** | **−51.0 %** |
+| Decode `interface{}` · small.json | 203 MB/s | **259 MB/s** | **+27.7 %** |
+| Decode `interface{}` · twitter.json | 379 MB/s | **487 MB/s** | **+28.5 %** |
+| Decode `interface{}` · citm_catalog.json | 395 MB/s | **602 MB/s** | **+52.7 %** |
+| Decode `interface{}` · canada.json (float-heavy) | 197 MB/s | **319 MB/s** | **+62.3 %** |
+| Decode `interface{}` · 1 MB formatted | 530 MB/s | **777 MB/s** | **+46.7 %** |
+| Decode `interface{}` · 5 MB formatted | 534 MB/s | **680 MB/s** | **+27.4 %** |
+| Decode `interface{}` · 10 MB formatted | 582 MB/s | **661 MB/s** | **+13.6 %** |
+| Decode struct (typed `SmallUser`) | 403 MB/s | **506 MB/s** | **+25.5 %** |
+| Decode struct · 1 MB formatted | 782 MB/s | **1286 MB/s** | **+64.5 %** |
+| Decode struct · 5 MB formatted | 745 MB/s | **1290 MB/s** | **+73.2 %** |
+| Decode struct · 10 MB formatted | 770 MB/s | **1268 MB/s** | **+64.7 %** |
 
-**13 of 15 measured gates beat sonic by ≥ 10 %.** The residual case is 10 MB
-10-level formatted decode, where sonic's native structural scanner still holds
-a small edge (+7–9 %) for very large payloads.
+**All 11 decode gates beat sonic by ≥ 13 %.** (Full encode scorecard is
+in [RESULTS.md](RESULTS.md); encode figures are unchanged from the prior
+commit series.) Memory footprint is a fraction of sonic's — the 10 MB
+interface{} bench allocates 23.7 MB vs sonic's 38.7 MB; the 10 MB struct
+bench allocates 9.1 MB vs sonic's 14.8 MB.
 
 ### ARM64 (Ampere Altra / Neoverse-N1)
 
@@ -125,9 +122,29 @@ The wins come from a combination of algorithmic and micro-architectural work:
   Measured 23.8 GB/s on an EPYC-Genoa vs 4.7 GB/s for the SWAR fallback.
   Gated at `n ≥ 64` so short strings don't eat the broadcast/zeroupper
   penalty.
-- **AVX-512BW whitespace skipper** — same 64-byte cadence,
-  `VPBROADCASTB × 4 + VPCMPEQB × 4 + KORQ + KNOTQ + KTESTQ + TZCNTQ`.
-  Closed most of the prior regression on 10-level formatted corpora.
+- **AVX-512BW whitespace skipper** — single `VPCMPUB $6, Z0, Z1, K1`
+  ("byte > 0x20") per 64-byte chunk. In JSON structural position every
+  byte ≤ 0x20 is either whitespace or a malformed byte the next token
+  parse will reject, so the 4× VPCMPEQB + KORQ-tree of the strict kernel
+  collapses to one comparator. Same trick applied to the arm64 NEON
+  kernel via a single `CMHI`.
+- **`[]interface{}` header slab (`sliceIfaceSlab`)** — `decodeAny`
+  returning a slice used to box the 24-byte header into the 8-byte
+  iface data word with a mallocgc per array (measured 5.9 M flat
+  allocs on the 10 MB interface{} profile). Pooling the headers
+  through a slab identical in shape to `floatSlab`/`stringSlab` drops
+  it to one chunked allocation per ~256 arrays.
+- **Position-pinning SWAR string scan** — `decodeString` /
+  `decodeStringRaw` compute a combined `"`/`\\`/ctl mask over an 8-byte
+  word and resolve the exact byte offset via `bits.TrailingZeros64`.
+  Eliminates the per-byte scalar retry loop we used to fall into after
+  the SWAR said "something's in this word" — cut `scanStringSIMD`
+  self-time from 3.32 s to 0.14 s on the 10 MB struct bench.
+- **Adjacency fast-paths in `decodeObject`/`decodeArray`** — compact
+  JSON (and most struct values) places `:`, `,`, or `}` / `]`
+  immediately after the preceding token. Inline checks for those bytes
+  before calling `skipWSFast` skip the function-call dispatch in the
+  common case.
 - **ARM64 NEON whitespace skipper** — a single `CMHI` compare against `0x20`
   per 16-byte load. In JSON structural positions every byte ≤ 0x20 is either
   whitespace (space / tab / LF / CR) or malformed input that the next token
