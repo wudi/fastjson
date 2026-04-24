@@ -7,27 +7,28 @@ A high-performance JSON library for Go with a drop-in `encoding/json` API.
 
 ## Highlights
 
-### Decode (amd64 AMD EPYC-Genoa, AVX-512BW, `-benchtime=5s -count≥2`)
+### Decode (amd64 AMD EPYC-Genoa, AVX-512BW, `-benchtime=5s -count=2`)
 
 | Workload | sonic | jsonx | Δ vs sonic |
 |---|--:|--:|--:|
-| Decode `interface{}` · small.json | 203 MB/s | **259 MB/s** | **+27.7 %** |
-| Decode `interface{}` · twitter.json | 379 MB/s | **487 MB/s** | **+28.5 %** |
-| Decode `interface{}` · citm_catalog.json | 395 MB/s | **602 MB/s** | **+52.7 %** |
-| Decode `interface{}` · canada.json (float-heavy) | 197 MB/s | **319 MB/s** | **+62.3 %** |
-| Decode `interface{}` · 1 MB formatted | 530 MB/s | **777 MB/s** | **+46.7 %** |
-| Decode `interface{}` · 5 MB formatted | 534 MB/s | **680 MB/s** | **+27.4 %** |
-| Decode `interface{}` · 10 MB formatted | 582 MB/s | **661 MB/s** | **+13.6 %** |
-| Decode struct (typed `SmallUser`) | 403 MB/s | **506 MB/s** | **+25.5 %** |
-| Decode struct · 1 MB formatted | 782 MB/s | **1286 MB/s** | **+64.5 %** |
-| Decode struct · 5 MB formatted | 745 MB/s | **1290 MB/s** | **+73.2 %** |
-| Decode struct · 10 MB formatted | 770 MB/s | **1268 MB/s** | **+64.7 %** |
+| Decode `interface{}` · small.json | 218 MB/s | **262 MB/s** | **+20.2 %** |
+| Decode `interface{}` · twitter.json | 381 MB/s | **477 MB/s** | **+25.2 %** |
+| Decode `interface{}` · citm_catalog.json | 403 MB/s | **618 MB/s** | **+53.4 %** |
+| Decode `interface{}` · canada.json (float-heavy) | 198 MB/s | **322 MB/s** | **+62.6 %** |
+| Decode `interface{}` · 1 MB formatted | 581 MB/s | **731 MB/s** | **+25.8 %** |
+| Decode `interface{}` · 5 MB formatted | 506 MB/s | **667 MB/s** | **+31.8 %** |
+| Decode `interface{}` · 10 MB formatted | 598 MB/s | **660 MB/s** | **+10.4 %** |
+| Decode struct (typed `SmallUser`) | 344 MB/s | **516 MB/s** | **+50.0 %** |
+| Decode struct · 1 MB formatted | 797 MB/s | **1499 MB/s** | **+88.1 %** |
+| Decode struct · 5 MB formatted | 767 MB/s | **1372 MB/s** | **+78.9 %** |
+| Decode struct · 10 MB formatted | 787 MB/s | **1348 MB/s** | **+71.3 %** |
 
-**All 11 decode gates beat sonic by ≥ 13 %.** (Full encode scorecard is
-in [RESULTS.md](RESULTS.md); encode figures are unchanged from the prior
-commit series.) Memory footprint is a fraction of sonic's — the 10 MB
-interface{} bench allocates 23.7 MB vs sonic's 38.7 MB; the 10 MB struct
-bench allocates 9.1 MB vs sonic's 14.8 MB.
+**All 11 decode gates beat sonic by ≥ 10 %.** Struct gates cluster at
++50–88 %, interface{} gates at +10–63 %. (Encode figures are in
+[RESULTS.md](RESULTS.md); unchanged from the prior commit series.)
+Memory footprint is a fraction of sonic's — the 10 MB interface{} bench
+allocates 23.7 MB vs sonic's 38.7 MB; the 10 MB struct bench allocates
+9.1 MB vs sonic's 14.8 MB.
 
 ### ARM64 (Ampere Altra / Neoverse-N1)
 

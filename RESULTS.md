@@ -311,3 +311,47 @@ one AVX-512 comparator once you notice that the JSON grammar already
 rejects every stray byte ≤ 0x20 at the next token parse — so "byte >
 0x20" is a faithful non-WS predicate in structural position. Together
 they turned the 10 MB interface{} gate from noise-floor to +13 %.
+
+## Phase 6 — second amd64 autoresearch sweep
+
+A second profiling pass on struct decode after Phase 5 found two more
+wins and several deadends worth documenting (so the next round doesn't
+re-try them).
+
+### Experiments
+
+| # | Hypothesis | Result | Kept |
+|---|-----------|--------|------|
+| X6 | Raise `decodeString`'s SWAR-to-SIMD warmup 16 → 32 for BOTH the key path and the value path | Value path regressed: twitter bench has long free-text fields where SIMD still wins past 16 bytes. | ✗ |
+| X6b | Raise only `decodeStringRaw` (struct-key path) warmup 16 → 32 — struct keys almost never exceed 16 bytes, so SWAR beats the SIMD setup cost for all of them | Struct 1 MB formatted 1286 → 1369 MB/s median (+6.5 %); interface{} untouched because it uses `decodeString`. | ✓ |
+| X7 | Split `decodeString` into a tiny 8-byte fast path + `decodeStringSlow` so the caller can inline the one-SWAR-word hit-path | Regressed twitter/1 MB/5 MB interface{} 4–12 %: the split forces a function-call boundary for medium strings that previously stayed inside the SWAR loop. | ✗ |
+| X8 | Direct-load struct-key prefix from `&key[0]` and mask, skipping the `[8]byte + copy()` round-trip | Struct 1 MB formatted median 1369 → 1445 MB/s (+5.5 %). Key is always a subslice of d.data (or d.scratch), both with trailing bytes past the key. | ✓ |
+| X9 | Strip the 1-byte-space fast path from `skipWSFast` so it fits the inline budget and every d.skipWS() site gets inlined | Regressed 4 gates by 7–8 %: the 1-byte-space path catches the post-`:` separator on every struct field, and that dominates the function-call overhead that inlining would save. | ✗ |
+| X10 | Move the 1-byte-space fast path into `skipWSDeep` (keeping it, just out of line) so `skipWSFast` inlines. Verified: skipWSFast cost 77 ≤ 80, inlines at every site | Marginal and noise-bound — some gates +11 %, others within ±3 %. No reliable gain vs the safe state, so preserved the original structure to guarantee the "no-regression" rule. | ✗ |
+
+### Phase-6 scorecard
+
+5 s × 2 single-threaded on the same EPYC-Genoa host. Every gate still
+clears the ≥ 10 %-vs-sonic bar, and struct-decode gates moved from
++64–73 % into the +71–88 % band — the 1 MB struct jumped 1286 → 1499
+MB/s, a ~17 % absolute improvement from X6b+X8 alone.
+
+| gate | phase-5 | phase-6 | Δ (jsonx-self) | vs sonic (phase-6) |
+|------|--------:|--------:|---------------:|-------------------:|
+| Decode struct · small | 506 | 516 | **+2.0 %** | **+50.0 %** |
+| Decode struct · 1 MB formatted | 1286 | 1499 | **+16.6 %** | **+88.1 %** |
+| Decode struct · 5 MB formatted | 1290 | 1372 | **+6.4 %** | **+78.9 %** |
+| Decode struct · 10 MB formatted | 1268 | 1348 | **+6.3 %** | **+71.3 %** |
+| Decode interface{} · 10 MB formatted | 661 | 660 | ≈ | **+10.4 %** |
+| (other interface{} gates) | — | within ±3 % of phase-5 | noise | +20 % to +63 % |
+
+### Takeaway for round 2
+
+After phase 5 closed every gate, the remaining wins came from the
+least-glamorous places: burning SWAR cycles instead of dispatching SIMD
+for short keys (X6b), and dropping a stack-scratch array copy that the
+compiler was generating for a 0–7-byte load (X8). The flashier ideas —
+inline-friendlier fast paths, decodeString splits — hit the
+no-regression rule, and a good half of round 2 was ruling them out
+rather than landing them. Recording the failures here because the next
+round is likely to be tempted by the same hypotheses.
